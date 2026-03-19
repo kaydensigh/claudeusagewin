@@ -1,7 +1,5 @@
-using System.Diagnostics;
 using System.Windows.Media;
 using System.Windows.Threading;
-using ClaudeUsage.Helpers;
 using ClaudeUsage.Models;
 using ClaudeUsage.Services;
 using Wpf.Ui.Appearance;
@@ -16,8 +14,8 @@ public partial class MainWindow : FluentWindow
 
     // Brushes kept for backward compat (tray icon colors in App.xaml.cs reference these indirectly)
 
-    private const double HeightCompact = 340;
-    private const double HeightDetailed = 470;
+    private const double HeightCompact = 270;
+    private const double HeightDetailed = 400;
 
     private double _bottomEdge;
     private UsageData? _currentData;
@@ -60,7 +58,6 @@ public partial class MainWindow : FluentWindow
 
     public void ApplyLocalization()
     {
-        TitleText.Text = LocalizationService.T("title");
         SessionGauge.Label = LocalizationService.T("session");
         WeeklyGauge.Label = LocalizationService.T("weekly");
         SonnetLabel.Text = LocalizationService.T("sonnet_only");
@@ -273,15 +270,6 @@ public partial class MainWindow : FluentWindow
         {
             await app.RefreshUsageData();
         }
-    }
-
-    private void GitHubButton_Click(object sender, System.Windows.RoutedEventArgs e)
-    {
-        Process.Start(new ProcessStartInfo
-        {
-            FileName = "https://github.com/sr-kai/claudeusagewin",
-            UseShellExecute = true
-        });
     }
 
     private void CloseButton_Click(object sender, System.Windows.RoutedEventArgs e)

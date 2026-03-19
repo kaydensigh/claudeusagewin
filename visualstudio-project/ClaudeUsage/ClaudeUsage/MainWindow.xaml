@@ -5,6 +5,7 @@
         xmlns:controls="clr-namespace:ClaudeUsage.Controls"
         Title="Claude Usage"
         Width="320"
+        WindowStyle="None"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
         Topmost="True"
@@ -12,7 +13,7 @@
         ExtendsContentIntoTitleBar="True"
         WindowBackdropType="None"
         KeyDown="Window_KeyDown"
-        Height="340">
+        MinHeight="270">
 
     <Border CornerRadius="8" Padding="16,16,16,12">
         <Grid>
@@ -20,14 +21,10 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
-                <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <!-- Header -->
-            <TextBlock x:Name="TitleText" Grid.Row="0" Text="Claude Usage for Windows" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,12" HorizontalAlignment="Center"/>
-
             <!-- Gauges: Session & Weekly side by side -->
-            <Grid Grid.Row="1" Margin="0,0,0,8">
+            <Grid Grid.Row="0" Margin="0,0,0,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="*"/>
@@ -38,7 +35,7 @@
             </Grid>
 
             <!-- Detail cards (visible when Show Details is enabled) -->
-            <Grid x:Name="DetailsPanel" Grid.Row="2" Margin="0,0,0,12" Visibility="Collapsed">
+            <Grid x:Name="DetailsPanel" Grid.Row="1" Margin="0,8,0,12" Visibility="Collapsed">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="*"/>
@@ -123,7 +120,7 @@
             </Grid>
 
             <!-- Footer: always visible -->
-            <Grid Grid.Row="3" Margin="0,8,0,0" VerticalAlignment="Bottom">
+            <Grid Grid.Row="2" Margin="0,0,0,0" VerticalAlignment="Bottom">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
@@ -135,7 +132,6 @@
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal">
-                    <ui:Button x:Name="GitHubButton" Icon="{ui:SymbolIcon Globe24}" Appearance="Transparent" Padding="8" Margin="0,0,4,0" ToolTip="GitHub" Click="GitHubButton_Click"/>
                     <ui:Button x:Name="CloseButton" Icon="{ui:SymbolIcon Dismiss24}" Appearance="Transparent" Padding="8" ToolTip="Close" Click="CloseButton_Click"/>
                 </StackPanel>
             </Grid>
