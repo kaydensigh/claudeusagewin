@@ -31,13 +31,16 @@ public class UsageWindow
     public double Utilization { get; set; }
 
     [JsonPropertyName("resets_at")]
-    public DateTimeOffset ResetsAt { get; set; }
+    public DateTimeOffset? ResetsAt { get; set; }
 
     public int UtilizationPercent => (int)Utilization;
 
     public double? GetElapsedPercent(int periodSeconds)
     {
-        var remaining = (ResetsAt - DateTimeOffset.UtcNow).TotalSeconds;
+        if (ResetsAt is not { } resetsAt)
+            return null;
+
+        var remaining = (resetsAt - DateTimeOffset.UtcNow).TotalSeconds;
         var elapsed = periodSeconds - remaining;
         return Math.Clamp(elapsed / periodSeconds * 100, 0, 100);
     }
@@ -46,7 +49,10 @@ public class UsageWindow
     {
         get
         {
-            var remaining = ResetsAt - DateTimeOffset.UtcNow;
+            if (ResetsAt is not { } resetsAt)
+                return "—";
+
+            var remaining = resetsAt - DateTimeOffset.UtcNow;
             if (remaining.TotalSeconds <= 0)
                 return "now";
 
@@ -67,14 +73,17 @@ public class ExtraUsageData
     public bool IsEnabled { get; set; }
 
     [JsonPropertyName("monthly_limit")]
-    public double MonthlyLimit { get; set; }
+    public double? MonthlyLimit { get; set; }
 
     [JsonPropertyName("used_credits")]
-    public double UsedCredits { get; set; }
+    public double? UsedCredits { get; set; }
 
-    public double LimitDollars => MonthlyLimit / 100.0;
-    public double UsedDollars => UsedCredits / 100.0;
-    public int UtilizationPercent => MonthlyLimit > 0 ? (int)(UsedCredits / MonthlyLimit * 100) : 0;
+    [JsonPropertyName("utilization")]
+    public double? Utilization { get; set; }
+
+    public double LimitDollars => (MonthlyLimit ?? 0) / 100.0;
+    public double UsedDollars => (UsedCredits ?? 0) / 100.0;
+    public int UtilizationPercent => MonthlyLimit is > 0 ? (int)(UsedCredits!.Value / MonthlyLimit.Value * 100) : 0;
 }
 
 public class CredentialsFile

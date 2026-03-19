@@ -118,11 +118,10 @@ public class UsageApiService
 
                 return null;
             }
-            catch (Exception ex)
+            catch (HttpRequestException ex)
             {
                 System.Diagnostics.Debug.WriteLine(
-                    $"Exception in GetUsageAsync (attempt {attempt + 1}/{MaxRetries + 1}): {ex.Message}");
-                System.Diagnostics.Debug.WriteLine($"Stack trace: {ex.StackTrace}");
+                    $"HTTP error in GetUsageAsync (attempt {attempt + 1}/{MaxRetries + 1}): {ex.Message}");
 
                 if (attempt < MaxRetries)
                 {
@@ -131,6 +130,18 @@ public class UsageApiService
                     continue;
                 }
 
+                return null;
+            }
+            catch (TaskCanceledException ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Request timed out or was cancelled in GetUsageAsync: {ex.Message}");
+                return null;
+            }
+            catch (JsonException ex)
+            {
+                System.Diagnostics.Debug.WriteLine(
+                    $"Failed to parse API response in GetUsageAsync: {ex.Message}");
                 return null;
             }
         }

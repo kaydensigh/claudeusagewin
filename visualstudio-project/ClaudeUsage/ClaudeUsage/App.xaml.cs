@@ -132,8 +132,8 @@ public partial class App : System.Windows.Application
         var windows = new[] { _lastUsageData.FiveHour, _lastUsageData.SevenDay, _lastUsageData.Sonnet };
         foreach (var w in windows)
         {
-            if (w == null) continue;
-            var remaining = (w.ResetsAt - DateTimeOffset.UtcNow).TotalSeconds;
+            if (w?.ResetsAt is not { } resetsAt) continue;
+            var remaining = (resetsAt - DateTimeOffset.UtcNow).TotalSeconds;
             if (remaining > 0 && (closest == null || remaining < closest))
                 closest = remaining;
         }
