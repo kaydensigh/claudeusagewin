@@ -18,8 +18,8 @@ public partial class App : System.Windows.Application
     private DispatcherTimer? _refreshTimer;
     private UsageData? _lastUsageData;
     private DateTime _lastUpdated;
-    private ContextMenu? _contextMenu;
-    private System.Windows.Controls.MenuItem? _launchAtLoginItem;
+    private Forms.ContextMenuStrip? _contextMenu;
+    private Forms.ToolStripMenuItem? _launchAtLoginItem;
     private DateTime _lastDeactivated;
 
     private Drawing.Icon? _currentIcon;
@@ -300,50 +300,38 @@ public partial class App : System.Windows.Application
             Text = "Claude Usage - Loading..."
         };
 
-        // Create WPF context menu with Fluent styling
+        // Create context menu (WinForms ContextMenuStrip — native to NotifyIcon, dismisses properly)
         CreateContextMenu();
 
-        // Left-click shows the popup, right-click shows context menu
+        // Left-click shows the popup; right-click is handled natively by ContextMenuStrip
         _notifyIcon.MouseClick += (s, e) =>
         {
             if (e.Button == Forms.MouseButtons.Left)
             {
                 ShowPopup();
             }
-            else if (e.Button == Forms.MouseButtons.Right)
-            {
-                ShowContextMenu();
-            }
         };
     }
 
     private void CreateContextMenu()
     {
-        _contextMenu = new ContextMenu();
+        _contextMenu?.Dispose();
+        _contextMenu = new Forms.ContextMenuStrip();
 
-        var refreshItem = new System.Windows.Controls.MenuItem
-        {
-            Header = LocalizationService.T("refresh_now"),
-            Icon = new SymbolIcon { Symbol = SymbolRegular.ArrowClockwise24 }
-        };
+        var refreshItem = new Forms.ToolStripMenuItem(LocalizationService.T("refresh_now"));
         refreshItem.Click += async (s, e) => await RefreshUsageData();
 
-        _launchAtLoginItem = new System.Windows.Controls.MenuItem
+        _launchAtLoginItem = new Forms.ToolStripMenuItem(LocalizationService.T("launch_at_login"))
         {
-            Header = LocalizationService.T("launch_at_login"),
-            IsCheckable = true,
-            IsChecked = StartupHelper.IsLaunchAtLoginEnabled()
+            CheckOnClick = true,
+            Checked = StartupHelper.IsLaunchAtLoginEnabled()
         };
         _launchAtLoginItem.Click += (s, e) =>
         {
-            StartupHelper.SetLaunchAtLogin(_launchAtLoginItem.IsChecked);
+            StartupHelper.SetLaunchAtLogin(_launchAtLoginItem.Checked);
         };
 
-        var exitItem = new System.Windows.Controls.MenuItem
-        {
-            Header = LocalizationService.T("exit"),
-            Icon = new SymbolIcon { Symbol = SymbolRegular.Dismiss24 }
-        };
+        var exitItem = new Forms.ToolStripMenuItem(LocalizationService.T("exit"));
         exitItem.Click += (s, e) =>
         {
             _notifyIcon!.Visible = false;
@@ -351,15 +339,11 @@ public partial class App : System.Windows.Application
         };
 
         // Language submenu
-        var languageItem = new System.Windows.Controls.MenuItem
-        {
-            Header = LocalizationService.T("language"),
-            Icon = new SymbolIcon { Symbol = SymbolRegular.Globe24 }
-        };
+        var languageItem = new Forms.ToolStripMenuItem(LocalizationService.T("language"));
         foreach (var (code, displayName) in LocalizationService.SupportedLanguages)
         {
             var langCode = code;
-            var langItem = new System.Windows.Controls.MenuItem { Header = displayName };
+            var langItem = new Forms.ToolStripMenuItem(displayName);
             langItem.Click += (s, e) =>
             {
                 LocalizationService.SetLanguage(langCode);
@@ -370,27 +354,16 @@ public partial class App : System.Windows.Application
                 if (_lastUsageData != null)
                     _mainWindow?.UpdateUsageData(_lastUsageData, _lastUpdated);
             };
-            languageItem.Items.Add(langItem);
+            languageItem.DropDownItems.Add(langItem);
         }
 
         _contextMenu.Items.Add(refreshItem);
         _contextMenu.Items.Add(_launchAtLoginItem);
         _contextMenu.Items.Add(languageItem);
-        _contextMenu.Items.Add(new Separator());
+        _contextMenu.Items.Add(new Forms.ToolStripSeparator());
         _contextMenu.Items.Add(exitItem);
-    }
 
-    private void ShowContextMenu()
-    {
-        if (_contextMenu == null) return;
-
-        // Update launch at login state
-        if (_launchAtLoginItem != null)
-        {
-            _launchAtLoginItem.IsChecked = StartupHelper.IsLaunchAtLoginEnabled();
-        }
-
-        _contextMenu.IsOpen = true;
+        _notifyIcon!.ContextMenuStrip = _contextMenu;
     }
 
     private void ShowPopup()
@@ -477,6 +450,7 @@ public partial class App : System.Windows.Application
         try { if (_mainWindow != null) SystemThemeWatcher.UnWatch(_mainWindow); }
         catch (InvalidOperationException) { /* window handle already destroyed */ }
         ApplicationThemeManager.Changed -= OnThemeChanged;
+        _contextMenu?.Dispose();
         _notifyIcon?.Dispose();
         _currentIcon?.Dispose();
         base.OnExit(e);

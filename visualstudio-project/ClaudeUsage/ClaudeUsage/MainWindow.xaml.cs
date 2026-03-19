@@ -79,27 +79,33 @@ public partial class MainWindow : FluentWindow
 
     public void ShowWithAnimation(double targetLeft, double bottomEdge)
     {
-        Left = targetLeft;
-
         // Show off-screen first to measure content height
+        Left = targetLeft;
         Top = bottomEdge;
         Opacity = 0;
         Show();
         UpdateLayout();
 
         // Now we know ActualHeight — position window so bottom aligns with bottomEdge
+        var workArea = System.Windows.SystemParameters.WorkArea;
         _bottomEdge = bottomEdge - 10;
         var finalTop = _bottomEdge - ActualHeight;
 
-        // Slide up from slightly below
-        Top = finalTop + 20;
+        // Clamp to work area so the window is never off-screen
+        if (finalTop < workArea.Top)
+            finalTop = workArea.Top;
+        Left = Math.Min(targetLeft, workArea.Right - ActualWidth - 10);
+
+        // Slide up from slightly below, but keep the start position on-screen too
+        var animStart = Math.Min(finalTop + 20, workArea.Bottom - ActualHeight);
+        Top = animStart;
         Opacity = 1;
 
         _countdownTimer.Start();
 
         var slideAnimation = new DoubleAnimation
         {
-            From = finalTop + 20,
+            From = animStart,
             To = finalTop,
             Duration = TimeSpan.FromMilliseconds(200),
             EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
