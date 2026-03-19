@@ -76,6 +76,15 @@ public class UsageGauge : FrameworkElement
     private static readonly Pen TimeMarkerPen;
     private double _lastArcThick;
 
+    // Cached background arc geometry (invalidated on size change)
+    private PathGeometry? _bgArcGeom;
+    private double _bgArcGeomRadius;
+
+    // Cached tick ring geometry
+    private Geometry? _tickGeomMajor;
+    private Geometry? _tickGeomMinor;
+    private double _tickGeomRadius;
+
     static UsageGauge()
     {
         var tmPen = new Pen(Brushes.White, 2.5);
@@ -200,11 +209,9 @@ public class UsageGauge : FrameworkElement
         return new Point(cx + Math.Cos(rad) * radius, cy + Math.Sin(rad) * radius);
     }
 
-    // --- Helper: draw an arc stroke ---
-    private static void DrawArcStroke(DrawingContext dc, Pen pen, double cx, double cy, double r, double startAngle, double sweepAngle)
+    // --- Helper: build a frozen arc geometry ---
+    private static PathGeometry BuildArcGeometry(double cx, double cy, double r, double startAngle, double sweepAngle)
     {
-        if (sweepAngle <= 0) return;
-
         var start = AngleToPoint(cx, cy, r, startAngle);
         var end = AngleToPoint(cx, cy, r, startAngle + sweepAngle);
         var size = new Size(r, r);
@@ -215,7 +222,15 @@ public class UsageGauge : FrameworkElement
 
         var geom = new PathGeometry();
         geom.Figures.Add(fig);
-        dc.DrawGeometry(null, pen, geom);
+        geom.Freeze();
+        return geom;
+    }
+
+    // --- Helper: draw an arc stroke ---
+    private static void DrawArcStroke(DrawingContext dc, Pen pen, double cx, double cy, double r, double startAngle, double sweepAngle)
+    {
+        if (sweepAngle <= 0) return;
+        dc.DrawGeometry(null, pen, BuildArcGeometry(cx, cy, r, startAngle, sweepAngle));
     }
 
     // --- Drawing methods ---
@@ -230,8 +245,14 @@ public class UsageGauge : FrameworkElement
 
     private void DrawBackgroundArc(DrawingContext dc, double cx, double cy, double r, double thick, bool dark)
     {
+        // Cache the arc geometry — it only changes when radius changes
+        if (_bgArcGeom == null || Math.Abs(_bgArcGeomRadius - r) > 0.01)
+        {
+            _bgArcGeom = BuildArcGeometry(cx, cy, r, StartAngle, SweepAngle);
+            _bgArcGeomRadius = r;
+        }
         var pen = dark ? _bgArcPenDark! : _bgArcPenLight!;
-        DrawArcStroke(dc, pen, cx, cy, r, StartAngle, SweepAngle);
+        dc.DrawGeometry(null, pen, _bgArcGeom);
     }
 
     private static void DrawFillArc(DrawingContext dc, double cx, double cy, double r, double thick, double value)
@@ -271,31 +292,47 @@ public class UsageGauge : FrameworkElement
     {
         EnsureTickPens();
 
-        var arcInner = r - arcThick / 2;
-        var tickOuterR = arcInner - gap;
-        var tickThick = arcThick * 0.4;
-        var tickInnerR = tickOuterR - tickThick;
+        // Rebuild tick geometry only when radius changes
+        if (_tickGeomMajor == null || Math.Abs(_tickGeomRadius - r) > 0.01)
+        {
+            var arcInner = r - arcThick / 2;
+            var tickOuterR = arcInner - gap;
+            var tickThick = arcThick * 0.4;
+            var tickInnerR = tickOuterR - tickThick;
+
+            var majorGeom = new StreamGeometry();
+            var minorGeom = new StreamGeometry();
+            using (var majorCtx = majorGeom.Open())
+            using (var minorCtx = minorGeom.Open())
+            {
+                for (double pct = 0; pct <= 100.01; pct += 2.5)
+                {
+                    var i = (int)Math.Round(pct);
+                    var major = i == 20 || i == 50 || i == 80;
+
+                    var angle = CosmeticAngle(pct);
+                    var rad = angle * Math.PI / 180;
+                    var cos = Math.Cos(rad);
+                    var sin = Math.Sin(rad);
+
+                    var inner = major ? tickInnerR : tickOuterR - tickThick * 0.5;
+                    var ctx = major ? majorCtx : minorCtx;
+
+                    ctx.BeginFigure(new Point(cx + cos * inner, cy + sin * inner), false, false);
+                    ctx.LineTo(new Point(cx + cos * tickOuterR, cy + sin * tickOuterR), true, false);
+                }
+            }
+            majorGeom.Freeze();
+            minorGeom.Freeze();
+            _tickGeomMajor = majorGeom;
+            _tickGeomMinor = minorGeom;
+            _tickGeomRadius = r;
+        }
 
         var majorPen = dark ? _tickMajorPenDark! : _tickMajorPenLight!;
         var minorPen = dark ? _tickMinorPenDark! : _tickMinorPenLight!;
-
-        for (double pct = 0; pct <= 100.01; pct += 2.5)
-        {
-            var i = (int)Math.Round(pct);
-            var major = i == 20 || i == 50 || i == 80;
-
-            var angle = CosmeticAngle(pct);
-            var rad = angle * Math.PI / 180;
-            var cos = Math.Cos(rad);
-            var sin = Math.Sin(rad);
-
-            var inner = major ? tickInnerR : tickOuterR - tickThick * 0.5;
-            var pen = major ? majorPen : minorPen;
-
-            dc.DrawLine(pen,
-                new Point(cx + cos * inner, cy + sin * inner),
-                new Point(cx + cos * tickOuterR, cy + sin * tickOuterR));
-        }
+        dc.DrawGeometry(null, minorPen, _tickGeomMinor);
+        dc.DrawGeometry(null, majorPen, _tickGeomMajor);
     }
 
     private void DrawScaleLabels(DrawingContext dc, double cx, double cy, double r, double thick, bool dark, double dpi)

@@ -22,6 +22,7 @@ public partial class MainWindow : FluentWindow
     private double _bottomEdge;
     private UsageData? _currentData;
     private readonly DispatcherTimer _countdownTimer;
+    private bool _hasBeenShown;
 
     public MainWindow()
     {
@@ -98,7 +99,15 @@ public partial class MainWindow : FluentWindow
     public void ShowPopup()
     {
         PositionBottomRight();
-        Show();
+        if (!_hasBeenShown)
+        {
+            Show();
+            _hasBeenShown = true;
+        }
+        else
+        {
+            Visibility = System.Windows.Visibility.Visible;
+        }
         Activate();
         _countdownTimer.Start();
     }
@@ -106,7 +115,9 @@ public partial class MainWindow : FluentWindow
     public void HideWithAnimation()
     {
         _countdownTimer.Stop();
-        Hide();
+        // Use Visibility.Hidden instead of Hide() so the visual tree stays alive
+        // and the next show doesn't need a full layout + render pass.
+        Visibility = System.Windows.Visibility.Hidden;
     }
 
     public void UpdateUsageData(UsageData? data, DateTime lastUpdated)
