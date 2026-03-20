@@ -31,13 +31,14 @@ public class UsageWindow
     public double Utilization { get; set; }
 
     [JsonPropertyName("resets_at")]
-    public DateTimeOffset ResetsAt { get; set; }
+    public DateTimeOffset? ResetsAt { get; set; }
 
     public int UtilizationPercent => (int)Utilization;
 
     public double? GetElapsedPercent(int periodSeconds)
     {
-        var remaining = (ResetsAt - DateTimeOffset.UtcNow).TotalSeconds;
+        if (ResetsAt == null) return null;
+        var remaining = (ResetsAt.Value - DateTimeOffset.UtcNow).TotalSeconds;
         var elapsed = periodSeconds - remaining;
         return Math.Clamp(elapsed / periodSeconds * 100, 0, 100);
     }
@@ -46,7 +47,9 @@ public class UsageWindow
     {
         get
         {
-            var remaining = ResetsAt - DateTimeOffset.UtcNow;
+            if (ResetsAt == null) return "--";
+
+            var remaining = ResetsAt.Value - DateTimeOffset.UtcNow;
             if (remaining.TotalSeconds <= 0)
                 return "now";
 

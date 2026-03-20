@@ -29,8 +29,8 @@ public class CredentialService
     {
         try
         {
-            var task = Task.Run(() => Directory.Exists(@"\\wsl$"));
-            return await task.WaitAsync(TimeSpan.FromSeconds(3));
+            var task = Task.Run(() => Directory.Exists(@"\\wsl$") || Directory.Exists(@"\\wsl.localhost"));
+            return await task.WaitAsync(TimeSpan.FromSeconds(5));
         }
         catch
         {
@@ -66,46 +66,43 @@ public class CredentialService
             }
         }
 
-        // 2. Check WSL paths (with availability guard)
-        if (await IsWslAvailableAsync())
+        // 2. Check WSL paths (try both \\wsl$ and \\wsl.localhost)
+        await Task.Run(() =>
         {
             string[] wslDistros = ["Debian", "Ubuntu", "Ubuntu-22.04", "Ubuntu-20.04", "kali-linux"];
+            string[] wslRoots = [@"\\wsl.localhost", @"\\wsl$"];
 
+            foreach (var wslRoot in wslRoots)
             foreach (var distro in wslDistros)
             {
-                var wslHomePath = $@"\\wsl$\{distro}\home";
-                if (Directory.Exists(wslHomePath))
+                try
                 {
-                    try
+                    var wslHomePath = $@"{wslRoot}\{distro}\home";
+                    if (!Directory.Exists(wslHomePath)) continue;
+
+                    foreach (var userDir in Directory.GetDirectories(wslHomePath))
                     {
-                        foreach (var userDir in Directory.GetDirectories(wslHomePath))
+                        var credPath = Path.Combine(userDir, ".claude", ".credentials.json");
+                        if (File.Exists(credPath))
                         {
-                            var credPath = Path.Combine(userDir, ".claude", ".credentials.json");
-                            if (File.Exists(credPath))
+                            try
                             {
-                                try
-                                {
-                                    candidates.Add((credPath, File.GetLastWriteTimeUtc(credPath)));
-                                }
-                                catch
-                                {
-                                    candidates.Add((credPath, DateTime.MinValue));
-                                }
-                                System.Diagnostics.Debug.WriteLine($"Found WSL credentials at: {credPath}");
+                                candidates.Add((credPath, File.GetLastWriteTimeUtc(credPath)));
                             }
+                            catch
+                            {
+                                candidates.Add((credPath, DateTime.MinValue));
+                            }
+                            System.Diagnostics.Debug.WriteLine($"Found WSL credentials at: {credPath}");
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Debug.WriteLine($"Error searching {wslHomePath}: {ex.Message}");
-                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"WSL path error ({wslRoot}\\{distro}): {ex.Message}");
                 }
             }
-        }
-        else
-        {
-            System.Diagnostics.Debug.WriteLine("WSL not available, skipping WSL credential paths");
-        }
+        }).WaitAsync(TimeSpan.FromSeconds(10));
 
         if (candidates.Count == 0)
         {
