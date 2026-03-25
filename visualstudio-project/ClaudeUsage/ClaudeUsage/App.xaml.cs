@@ -4,21 +4,21 @@ using ClaudeUsage.Models;
 using ClaudeUsage.Services;
 using Svg;
 using Wpf.Ui.Appearance;
+using H.NotifyIcon.Core;
 using Drawing = System.Drawing;
-using Forms = System.Windows.Forms;
 
 namespace ClaudeUsage;
 
 public partial class App : System.Windows.Application
 {
-    private Forms.NotifyIcon? _notifyIcon;
+    private TrayIconWithContextMenu? _trayIcon;
     private MainWindow? _mainWindow;
     private DispatcherTimer? _refreshTimer;
     private UsageData? _lastUsageData;
     private DateTime _lastUpdated;
-    private Forms.ContextMenuStrip? _contextMenu;
-    private Forms.ToolStripMenuItem? _launchAtLoginItem;
-    private Forms.ToolStripMenuItem? _showDetailsItem;
+    private PopupMenu? _contextMenu;
+    private PopupMenuItem? _launchAtLoginItem;
+    private PopupMenuItem? _showDetailsItem;
     private DateTime _lastDeactivated;
 
     private Drawing.Icon? _currentIcon;
@@ -284,7 +284,7 @@ public partial class App : System.Windows.Application
         if (svgDoc != null)
         {
             _currentIcon = CreateIconFromSvg(svgDoc, Drawing.Color.FromArgb(156, 163, 175)); // Gray dot
-            _notifyIcon!.Icon = _currentIcon;
+            _trayIcon!.UpdateIcon(_currentIcon.Handle);
         }
         oldIcon?.Dispose();
     }
@@ -306,97 +306,109 @@ public partial class App : System.Windows.Application
 
         var oldIcon = _currentIcon;
         _currentIcon = CreateUsageIcon((int)utilizationPercent, color);
-        _notifyIcon!.Icon = _currentIcon;
+        _trayIcon!.UpdateIcon(_currentIcon.Handle);
         oldIcon?.Dispose();
     }
 
     private void CreateTrayIcon()
     {
         _currentIcon = CreateUsageIcon(0, Drawing.Color.FromArgb(156, 163, 175)); // Gray
-        _notifyIcon = new Forms.NotifyIcon
+        
+        // Create H.NotifyIcon tray icon
+        _trayIcon = new TrayIconWithContextMenu
         {
-            Icon = _currentIcon,
-            Visible = true,
-            Text = "Claude Usage - Loading..."
+            Icon = _currentIcon.Handle,
+            ToolTip = "Claude Usage - Loading..."
         };
-
-        // Create context menu (WinForms ContextMenuStrip — native to NotifyIcon, dismisses properly)
+        
         CreateContextMenu();
-
-        // Left-click shows the popup; right-click is handled natively by ContextMenuStrip
-        _notifyIcon.MouseClick += (s, e) =>
+        _trayIcon.Create();
+        
+        // Handle left-click via MessageWindow event (runs on background thread, must marshal to UI thread)
+        _trayIcon.MessageWindow.MouseEventReceived += (s, e) =>
         {
-            if (e.Button == Forms.MouseButtons.Left)
+            if (e.MouseEvent == MouseEvent.IconLeftMouseUp)
             {
-                ShowPopup();
+                Dispatcher.Invoke(() => ShowPopup());
             }
         };
     }
 
     private void CreateContextMenu()
     {
-        _contextMenu?.Dispose();
-        _contextMenu = new Forms.ContextMenuStrip();
-
-        var refreshItem = new Forms.ToolStripMenuItem(LocalizationService.T("refresh_now"));
-        refreshItem.Click += async (s, e) => await RefreshUsageData();
-
-        _launchAtLoginItem = new Forms.ToolStripMenuItem(LocalizationService.T("launch_at_login"))
+        var refreshItem = new PopupMenuItem(LocalizationService.T("refresh_now"), async (s, e) =>
         {
-            CheckOnClick = true,
+            await Dispatcher.InvokeAsync(() => _ = RefreshUsageData());
+        });
+
+        _launchAtLoginItem = new PopupMenuItem(LocalizationService.T("launch_at_login"), (s, e) =>
+        {
+            var newItem = _launchAtLoginItem!;
+            newItem.Checked = !newItem.Checked;
+            StartupHelper.SetLaunchAtLogin(newItem.Checked);
+        })
+        {
             Checked = StartupHelper.IsLaunchAtLoginEnabled()
         };
-        _launchAtLoginItem.Click += (s, e) =>
-        {
-            StartupHelper.SetLaunchAtLogin(_launchAtLoginItem.Checked);
-        };
 
-        _showDetailsItem = new Forms.ToolStripMenuItem(LocalizationService.T("show_details"))
+        _showDetailsItem = new PopupMenuItem(LocalizationService.T("show_details"), (s, e) =>
         {
-            CheckOnClick = true,
+            var newItem = _showDetailsItem!;
+            newItem.Checked = !newItem.Checked;
+            StartupHelper.SetShowDetails(newItem.Checked);
+            Dispatcher.Invoke(() => _mainWindow?.SetShowDetails(newItem.Checked));
+        })
+        {
             Checked = StartupHelper.GetShowDetails()
         };
-        _showDetailsItem.Click += (s, e) =>
-        {
-            var show = _showDetailsItem.Checked;
-            StartupHelper.SetShowDetails(show);
-            _mainWindow?.SetShowDetails(show);
-        };
 
-        var exitItem = new Forms.ToolStripMenuItem(LocalizationService.T("exit"));
-        exitItem.Click += (s, e) =>
+        var exitItem = new PopupMenuItem(LocalizationService.T("exit"), (s, e) =>
         {
-            _notifyIcon!.Visible = false;
-            Shutdown();
-        };
+            _trayIcon?.Remove();
+            Dispatcher.Invoke(() => Shutdown());
+        });
 
         // Language submenu
-        var languageItem = new Forms.ToolStripMenuItem(LocalizationService.T("language"));
+        var languageItems = new List<PopupMenuItem>();
         foreach (var (code, displayName) in LocalizationService.SupportedLanguages)
         {
             var langCode = code;
-            var langItem = new Forms.ToolStripMenuItem(displayName);
-            langItem.Click += (s, e) =>
+            var langItem = new PopupMenuItem(displayName, (s, e) =>
             {
                 LocalizationService.SetLanguage(langCode);
                 StartupHelper.SaveLanguage(langCode);
                 // Rebuild menu and refresh UI with new language
                 CreateContextMenu();
-                _mainWindow?.ApplyLocalization();
-                if (_lastUsageData != null)
-                    _mainWindow?.UpdateUsageData(_lastUsageData, _lastUpdated);
-            };
-            languageItem.DropDownItems.Add(langItem);
+                Dispatcher.Invoke(() =>
+                {
+                    _mainWindow?.ApplyLocalization();
+                    if (_lastUsageData != null)
+                        _mainWindow?.UpdateUsageData(_lastUsageData, _lastUpdated);
+                });
+            });
+            languageItems.Add(langItem);
         }
 
-        _contextMenu.Items.Add(refreshItem);
-        _contextMenu.Items.Add(_showDetailsItem);
-        _contextMenu.Items.Add(_launchAtLoginItem);
-        _contextMenu.Items.Add(languageItem);
-        _contextMenu.Items.Add(new Forms.ToolStripSeparator());
-        _contextMenu.Items.Add(exitItem);
+        var languageMenu = new PopupSubMenu(LocalizationService.T("language"));
+        foreach (var item in languageItems)
+        {
+            languageMenu.Items.Add(item);
+        }
 
-        _notifyIcon!.ContextMenuStrip = _contextMenu;
+        _contextMenu = new PopupMenu
+        {
+            Items =
+            {
+                refreshItem,
+                _showDetailsItem,
+                _launchAtLoginItem,
+                languageMenu,
+                new PopupMenuSeparator(),
+                exitItem
+            }
+        };
+
+        _trayIcon!.ContextMenu = _contextMenu;
     }
 
     private void ShowPopup()
@@ -420,7 +432,7 @@ public partial class App : System.Windows.Application
         {
             _consecutiveErrors++;
             UpdateTrayIconError();
-            _notifyIcon!.Text = $"Claude Usage - {LocalizationService.T("no_credentials")}\n{LocalizationService.T("run_claude")}";
+            _trayIcon!.UpdateToolTip($"Claude Usage - {LocalizationService.T("no_credentials")}\n{LocalizationService.T("run_claude")}");
             return;
         }
 
@@ -430,7 +442,7 @@ public partial class App : System.Windows.Application
         {
             _consecutiveErrors++;
             UpdateTrayIconError();
-            _notifyIcon!.Text = $"Claude Usage - {LocalizationService.T("failed_to_fetch")}";
+            _trayIcon!.UpdateToolTip($"Claude Usage - {LocalizationService.T("failed_to_fetch")}");
             return;
         }
 
@@ -456,7 +468,7 @@ public partial class App : System.Windows.Application
         var sessionReset = usage.FiveHour?.TimeUntilReset ?? "N/A";
         var weeklyReset = usage.SevenDay?.TimeUntilReset ?? "N/A";
 
-        _notifyIcon!.Text = $"Claude Usage\n{LocalizationService.T("tooltip_session", sessionPct, sessionReset)}\n{LocalizationService.T("tooltip_weekly", weeklyPct, weeklyReset)}";
+        _trayIcon!.UpdateToolTip($"Claude Usage\n{LocalizationService.T("tooltip_session", sessionPct, sessionReset)}\n{LocalizationService.T("tooltip_weekly", weeklyPct, weeklyReset)}");
 
         // Update popup if visible
         if (_mainWindow?.IsVisible == true)
@@ -470,8 +482,7 @@ public partial class App : System.Windows.Application
         try { if (_mainWindow != null) SystemThemeWatcher.UnWatch(_mainWindow); }
         catch (InvalidOperationException) { /* window handle already destroyed */ }
         ApplicationThemeManager.Changed -= OnThemeChanged;
-        _contextMenu?.Dispose();
-        _notifyIcon?.Dispose();
+        _trayIcon?.Dispose();
         _currentIcon?.Dispose();
         base.OnExit(e);
     }
