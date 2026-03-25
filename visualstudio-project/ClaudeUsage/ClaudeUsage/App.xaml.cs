@@ -12,16 +12,19 @@ namespace ClaudeUsage;
 public partial class App : System.Windows.Application
 {
     private TrayIconWithContextMenu? _trayIcon;
+    private TrayIconWithContextMenu? _weeklyTrayIcon;
     private MainWindow? _mainWindow;
     private DispatcherTimer? _refreshTimer;
     private UsageData? _lastUsageData;
     private DateTime _lastUpdated;
     private PopupMenu? _contextMenu;
+    private PopupMenu? _weeklyContextMenu;
     private PopupMenuItem? _launchAtLoginItem;
     private PopupMenuItem? _showDetailsItem;
     private DateTime _lastDeactivated;
 
     private Drawing.Icon? _currentIcon;
+    private Drawing.Icon? _weeklyIcon;
 
     // SVG document cache — avoids re-parsing embedded resources on every icon update
     private readonly Dictionary<string, SvgDocument?> _svgCache = new();
@@ -280,13 +283,17 @@ public partial class App : System.Windows.Application
     private void UpdateTrayIconError()
     {
         var oldIcon = _currentIcon;
+        var oldWeeklyIcon = _weeklyIcon;
         var svgDoc = LoadSvgFromResource("error.svg");
         if (svgDoc != null)
         {
-            _currentIcon = CreateIconFromSvg(svgDoc, Drawing.Color.FromArgb(156, 163, 175)); // Gray dot
+            _currentIcon = CreateIconFromSvg(svgDoc, Drawing.Color.FromArgb(156, 163, 175));
             _trayIcon!.UpdateIcon(_currentIcon.Handle);
+            _weeklyIcon = CreateIconFromSvg(svgDoc, Drawing.Color.FromArgb(156, 163, 175));
+            _weeklyTrayIcon!.UpdateIcon(_weeklyIcon.Handle);
         }
         oldIcon?.Dispose();
+        oldWeeklyIcon?.Dispose();
     }
 
     private void OnThemeChanged(Wpf.Ui.Appearance.ApplicationTheme currentTheme, System.Windows.Media.Color systemAccent)
@@ -299,37 +306,92 @@ public partial class App : System.Windows.Application
     {
         if (_lastUsageData == null) return;
 
-        var window = _lastUsageData.FiveHour;
-        var utilizationPercent = window?.Utilization ?? 0;
-        var elapsedPercent = window?.GetElapsedPercent(5 * 3600) ?? 0;
-        var color = GetColorForUsageElapsed(utilizationPercent, elapsedPercent);
+        // Update session icon
+        var sessionWindow = _lastUsageData.FiveHour;
+        var sessionUtilPct = sessionWindow?.Utilization ?? 0;
+        var sessionElapsedPct = sessionWindow?.GetElapsedPercent(5 * 3600) ?? 0;
+        var sessionColor = GetColorForUsageElapsed(sessionUtilPct, sessionElapsedPct);
 
         var oldIcon = _currentIcon;
-        _currentIcon = CreateUsageIcon((int)utilizationPercent, color);
+        _currentIcon = CreateUsageIcon((int)sessionUtilPct, sessionColor);
         _trayIcon!.UpdateIcon(_currentIcon.Handle);
         oldIcon?.Dispose();
+        
+        // Update weekly icon
+        var weeklyWindow = _lastUsageData.SevenDay;
+        var weeklyUtilPct = weeklyWindow?.Utilization ?? 0;
+        var weeklyElapsedPct = weeklyWindow?.GetElapsedPercent(7 * 24 * 3600) ?? 0;
+        var weeklyColor = GetColorForUsageElapsed(weeklyUtilPct, weeklyElapsedPct);
+
+        var oldWeeklyIcon = _weeklyIcon;
+        _weeklyIcon = CreateUsageIcon((int)weeklyUtilPct, weeklyColor);
+        _weeklyTrayIcon!.UpdateIcon(_weeklyIcon.Handle);
+        oldWeeklyIcon?.Dispose();
     }
 
-    private void CreateTrayIcon()
+private void CreateTrayIcon()
     {
         _currentIcon = CreateUsageIcon(0, Drawing.Color.FromArgb(156, 163, 175)); // Gray
+        _weeklyIcon = CreateUsageIcon(0, Drawing.Color.FromArgb(156, 163, 175)); // Gray
         
-        // Create H.NotifyIcon tray icon
-        _trayIcon = new TrayIconWithContextMenu
+        // Create session (5-hour) tray icon
+        _trayIcon = new TrayIconWithContextMenu("ClaudeUsage.Session")
         {
             Icon = _currentIcon.Handle,
-            ToolTip = "Claude Usage - Loading..."
+            ToolTip = "Claude Session - Loading..."
         };
         
         CreateContextMenu();
         _trayIcon.Create();
         
-        // Handle left-click via MessageWindow event (runs on background thread, must marshal to UI thread)
         _trayIcon.MessageWindow.MouseEventReceived += (s, e) =>
         {
             if (e.MouseEvent == MouseEvent.IconLeftMouseUp)
             {
                 Dispatcher.Invoke(() => ShowPopup());
+            }
+        };
+        
+        // Create weekly tray icon
+        _weeklyTrayIcon = new TrayIconWithContextMenu("ClaudeUsage.Weekly")
+        {
+            Icon = _weeklyIcon.Handle,
+            ToolTip = "Claude Weekly - Loading..."
+        };
+        
+        CreateWeeklyContextMenu();
+        _weeklyTrayIcon.Create();
+        
+        _weeklyTrayIcon.MessageWindow.MouseEventReceived += (s, e) =>
+        {
+            if (e.MouseEvent == MouseEvent.IconLeftMouseUp)
+            {
+                Dispatcher.Invoke(() => ShowPopup());
+            }
+        };
+    }
+    
+    private void CreateWeeklyContextMenu()
+    {
+        var refreshItem = new PopupMenuItem(LocalizationService.T("refresh_now"), async (s, e) =>
+        {
+            await Dispatcher.InvokeAsync(() => _ = RefreshUsageData());
+        });
+        
+        var exitItem = new PopupMenuItem(LocalizationService.T("exit"), (s, e) =>
+        {
+            _trayIcon?.Remove();
+            _weeklyTrayIcon?.Remove();
+            Dispatcher.Invoke(() => Shutdown());
+        });
+
+        _weeklyContextMenu = new PopupMenu
+        {
+            Items =
+            {
+                refreshItem,
+                new PopupMenuSeparator(),
+                exitItem
             }
         };
     }
@@ -432,7 +494,8 @@ public partial class App : System.Windows.Application
         {
             _consecutiveErrors++;
             UpdateTrayIconError();
-            _trayIcon!.UpdateToolTip($"Claude Usage - {LocalizationService.T("no_credentials")}\n{LocalizationService.T("run_claude")}");
+            _trayIcon!.UpdateToolTip($"Claude Session - {LocalizationService.T("no_credentials")}");
+            _weeklyTrayIcon!.UpdateToolTip($"Claude Weekly - {LocalizationService.T("no_credentials")}");
             return;
         }
 
@@ -442,7 +505,8 @@ public partial class App : System.Windows.Application
         {
             _consecutiveErrors++;
             UpdateTrayIconError();
-            _trayIcon!.UpdateToolTip($"Claude Usage - {LocalizationService.T("failed_to_fetch")}");
+            _trayIcon!.UpdateToolTip($"Claude Session - {LocalizationService.T("failed_to_fetch")}");
+            _weeklyTrayIcon!.UpdateToolTip($"Claude Weekly - {LocalizationService.T("failed_to_fetch")}");
             return;
         }
 
@@ -462,13 +526,14 @@ public partial class App : System.Windows.Application
 
         UpdateTrayIcon();
 
-        // Update tooltip
+        // Update tooltips
         var sessionPct = usage.FiveHour?.UtilizationPercent ?? 0;
         var weeklyPct = usage.SevenDay?.UtilizationPercent ?? 0;
         var sessionReset = usage.FiveHour?.TimeUntilReset ?? "N/A";
         var weeklyReset = usage.SevenDay?.TimeUntilReset ?? "N/A";
 
-        _trayIcon!.UpdateToolTip($"Claude Usage\n{LocalizationService.T("tooltip_session", sessionPct, sessionReset)}\n{LocalizationService.T("tooltip_weekly", weeklyPct, weeklyReset)}");
+        _trayIcon!.UpdateToolTip($"Claude Session\n{LocalizationService.T("tooltip_session", sessionPct, sessionReset)}");
+        _weeklyTrayIcon!.UpdateToolTip($"Claude Weekly\n{LocalizationService.T("tooltip_weekly", weeklyPct, weeklyReset)}");
 
         // Update popup if visible
         if (_mainWindow?.IsVisible == true)
@@ -483,7 +548,9 @@ public partial class App : System.Windows.Application
         catch (InvalidOperationException) { /* window handle already destroyed */ }
         ApplicationThemeManager.Changed -= OnThemeChanged;
         _trayIcon?.Dispose();
+        _weeklyTrayIcon?.Dispose();
         _currentIcon?.Dispose();
+        _weeklyIcon?.Dispose();
         base.OnExit(e);
     }
 }
