@@ -54,21 +54,21 @@ public class App
     private const int FiveHourSeconds = 5 * 3600;
     private const int SevenDaySeconds = 7 * 24 * 3600;
 
-    // Adaptive polling
-    private const int PollNormal = 420;       // 7 min
-    private const int PollFast = 300;         // 5 min
-    private const int PollIdle = 1200;        // 20 min
-    private const int PollError = 60;         // 1 min after errors
-    private const int PollFastExtra = 2;      // Extra fast polls after usage increase
-    private const int MaxBackoff = 1200;      // 20 min max backoff
-    private const int IdleThreshold = 600;    // 10 min idle before slow polling
+    // Wake / refresh timing
+    private const int WakeInterval = 300;     // 5 min — normal wake cadence
+    private const int RefreshMinAge = 240;    // 4 min — skip refresh if last success was more recent
+    private const int RetryDelay = 60;        // 1 min — wake sooner after a failed refresh
+    private const int ResetBuffer = 5;        // seconds to wait after a quota reset before waking
+    private const int IdleThreshold = 600;    // 10 min idle before skipping refresh
+    private const int MaxBackoff = 1200;      // 20 min max retry backoff
 
     // Shared font for icon rendering (reused across CreateUsageIcon calls)
     private static readonly Drawing.Font IconFont = new("Segoe UI Semibold", 18, Drawing.FontStyle.Regular);
 
-    private int _fastPollsRemaining;
+    private bool _isRetryWake;
     private int _consecutiveErrors;
-    private double _previousFiveHourPct = -1;
+    private DateTimeOffset _lastSuccessfulRefresh = DateTimeOffset.MinValue;
+    private DateTimeOffset _lastFailedRefresh = DateTimeOffset.MinValue;
 
     public async void Start()
     {
@@ -81,21 +81,26 @@ public class App
         // Create the tray icon
         CreateTrayIcon();
 
-        // Set up adaptive refresh timer
+        // Set up wake timer (one-shot; OnWake reschedules after each cycle)
         _refreshTimer = new Timer(_ =>
         {
-            // Marshal back to the STA thread for UI work.
-            // Wrap in try/catch because Post callback is async void.
             _syncContext?.Post(async _ =>
             {
-                try { await AdaptivePoll(); }
-                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Poll error: {ex.Message}"); }
+                try { await OnWake(); }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Wake error: {ex.Message}"); }
             }, null);
-        }, null, PollNormal * 1000, Timeout.Infinite);
+        }, null, Timeout.Infinite, Timeout.Infinite);
 
         // Initial data fetch
-        try { await RefreshUsageData(); }
+        try
+        {
+            if (await RefreshUsageData())
+                _lastSuccessfulRefresh = DateTimeOffset.UtcNow;
+        }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Initial fetch error: {ex.Message}"); }
+
+        // Schedule first wake
+        ScheduleWake(WakeInterval);
     }
 
     public void Shutdown()
@@ -111,67 +116,106 @@ public class App
         _overageIcon?.Dispose();
     }
 
-    private async Task AdaptivePoll()
+    private async Task OnWake()
     {
-        // Check if user is idle/locked — use slower polling
-        var isIdle = IdleHelper.IsUserAway(IdleThreshold);
+        // If session or weekly is at 100%, sleep until earliest reset + buffer
+        var sleepUntil = SecondsUntilCapReset();
+        if (sleepUntil.HasValue)
+        {
+            ScheduleWake(sleepUntil.Value);
+            return;
+        }
 
-        await RefreshUsageData();
+        // Screen locked — skip refresh
+        if (IdleHelper.IsWorkstationLocked())
+        {
+            ScheduleWake(WakeInterval);
+            return;
+        }
 
-        // Calculate next interval based on result
-        var nextInterval = CalculatePollInterval(isIdle);
-        _refreshTimer!.Change(nextInterval * 1000, Timeout.Infinite);
+        // User idle 10+ min — skip refresh
+        if (IdleHelper.GetIdleSeconds() >= IdleThreshold)
+        {
+            ScheduleWake(WakeInterval);
+            return;
+        }
 
-        System.Diagnostics.Debug.WriteLine(
-            $"Adaptive poll: next in {nextInterval}s (fast={_fastPollsRemaining}, errors={_consecutiveErrors}, idle={isIdle})");
+        // Retry wake — retry if backoff has elapsed, otherwise sleep until it does
+        if (_isRetryWake)
+        {
+            var backoff = CalculateBackoff();
+            var sinceFail = (DateTimeOffset.UtcNow - _lastFailedRefresh).TotalSeconds;
+            if (sinceFail >= backoff)
+            {
+                await AttemptRefresh();
+            }
+            else
+            {
+                var remaining = (int)(backoff - sinceFail) + ResetBuffer;
+                ScheduleWake(Math.Max(remaining, 1));
+            }
+            return;
+        }
+
+        // Refresh if last success was long enough ago
+        var sinceLast = (DateTimeOffset.UtcNow - _lastSuccessfulRefresh).TotalSeconds;
+        if (sinceLast >= RefreshMinAge)
+        {
+            await AttemptRefresh();
+        }
+        else
+        {
+            // Too soon — schedule wake at 5 min after last refresh
+            var remaining = (int)(WakeInterval - sinceLast);
+            ScheduleWake(Math.Max(remaining, 1));
+        }
     }
 
-    private int CalculatePollInterval(bool isIdle)
+    private async Task AttemptRefresh()
     {
-        // Error backoff
-        if (_consecutiveErrors > 0)
+        if (await RefreshUsageData())
         {
-            var backoff = (int)(PollError * Math.Pow(2, Math.Min(_consecutiveErrors - 1, 4)));
-            return Math.Min(backoff, MaxBackoff);
+            _lastSuccessfulRefresh = DateTimeOffset.UtcNow;
+            _consecutiveErrors = 0;
+            _isRetryWake = false;
+            ScheduleWake(WakeInterval);
         }
-
-        if (isIdle)
-            return PollIdle;
-
-        // Fast polling after usage increase
-        if (_fastPollsRemaining > 0)
+        else
         {
-            _fastPollsRemaining--;
-            return PollFast;
+            _consecutiveErrors++;
+            _lastFailedRefresh = DateTimeOffset.UtcNow;
+            _isRetryWake = true;
+            ScheduleWake(RetryDelay);
         }
-
-        // Align to imminent quota reset
-        var nextReset = SecondsUntilNextReset();
-        if (nextReset.HasValue && nextReset.Value + 5 <= PollNormal * 1.5)
-        {
-            _fastPollsRemaining = PollFastExtra;
-            return Math.Max((int)nextReset.Value + 5, PollFast);
-        }
-
-        return PollNormal;
     }
 
-    private double? SecondsUntilNextReset()
+    private int CalculateBackoff() =>
+        Math.Min((int)(RetryDelay * Math.Pow(2, Math.Min(_consecutiveErrors - 1, 4))), MaxBackoff);
+
+    private void ScheduleWake(int seconds)
+    {
+        _refreshTimer!.Change(seconds * 1000, Timeout.Infinite);
+        System.Diagnostics.Debug.WriteLine($"Next wake in {seconds}s (retry={_isRetryWake})");
+    }
+
+    /// <summary>
+    /// If 5-hour or weekly usage is at 100%, returns seconds until the earliest reset + buffer.
+    /// </summary>
+    private int? SecondsUntilCapReset()
     {
         if (_lastUsageData == null) return null;
 
-        double? closest = null;
-
-        var windows = new[] { _lastUsageData.FiveHour, _lastUsageData.SevenDay, _lastUsageData.Sonnet };
-        foreach (var w in windows)
+        double? earliest = null;
+        foreach (var w in new[] { _lastUsageData.FiveHour, _lastUsageData.SevenDay })
         {
-            if (w?.ResetsAt is not { } resetsAt) continue;
+            if (w is not { Utilization: >= 100 }) continue;
+            if (w.ResetsAt is not { } resetsAt) continue;
             var remaining = (resetsAt - DateTimeOffset.UtcNow).TotalSeconds;
-            if (remaining > 0 && (closest == null || remaining < closest))
-                closest = remaining;
+            if (remaining > 0 && (earliest == null || remaining < earliest))
+                earliest = remaining;
         }
 
-        return closest;
+        return earliest.HasValue ? (int)earliest.Value + ResetBuffer : null;
     }
 
     private static void DrawElapsedDot(Drawing.Graphics g, int iconSize, double elapsedPct)
@@ -451,7 +495,11 @@ public class App
     private PopupMenuItem CreateRefreshMenuItem() =>
         new(LocalizationService.T("refresh_now"), async (s, e) =>
         {
-            try { await RefreshUsageData(); }
+            try
+            {
+                if (await RefreshUsageData())
+                    _lastSuccessfulRefresh = DateTimeOffset.UtcNow;
+            }
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Refresh error: {ex.Message}"); }
         });
 
@@ -562,33 +610,24 @@ public class App
 
     private void HandleFetchError(string localizationKey)
     {
-        _consecutiveErrors++;
         UpdateTrayIconError();
         var msg = LocalizationService.T(localizationKey);
         _trayIcon!.UpdateToolTip($"Claude Session - {msg}");
         _weeklyTrayIcon!.UpdateToolTip($"Claude Weekly - {msg}");
     }
 
-    public async Task RefreshUsageData()
+    /// <summary>
+    /// Fetches usage data from the API. Returns true on success.
+    /// </summary>
+    public async Task<bool> RefreshUsageData()
     {
         var usage = await UsageApiService.GetUsageAsync();
 
         if (usage == null)
         {
             HandleFetchError("failed_to_fetch");
-            return;
+            return false;
         }
-
-        // Successful fetch — reset error count
-        _consecutiveErrors = 0;
-
-        // Detect usage increase for fast polling
-        var currentPct = usage.FiveHour?.Utilization ?? 0;
-        if (_previousFiveHourPct >= 0 && currentPct > _previousFiveHourPct)
-        {
-            _fastPollsRemaining = PollFastExtra + 1;
-        }
-        _previousFiveHourPct = currentPct;
 
         _lastUsageData = usage;
 
@@ -618,5 +657,7 @@ public class App
             var overageLimit = usage.ExtraUsage.LimitDollars;
             _overageTrayIcon.UpdateToolTip($"Claude Overage\n{overagePct}% | ${overageUsed:F2} / ${overageLimit:F2}");
         }
+
+        return true;
     }
 }
