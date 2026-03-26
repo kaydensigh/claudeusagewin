@@ -9,10 +9,11 @@ namespace ClaudeUsage;
 
 public class App
 {
-    // Posts WM_QUIT to the message loop in Program.Main, causing GetMessage to
-    // return 0 and the app to exit cleanly. Replaces WinForms Application.Exit().
     [DllImport("user32.dll")]
     private static extern void PostQuitMessage(int nExitCode);
+
+    [DllImport("user32.dll")]
+    private static extern bool DestroyIcon(IntPtr hIcon);
 
     private TrayIconWithContextMenu? _trayIcon;
     private TrayIconWithContextMenu? _weeklyTrayIcon;
@@ -36,6 +37,22 @@ public class App
     private Drawing.Icon? _sonnetIcon;
     private Drawing.Icon? _overageIcon;
 
+    // Track last icon state to avoid recreating identical icons
+    private (int pct, Drawing.Color color) _lastSessionState;
+    private (int pct, Drawing.Color color) _lastWeeklyState;
+    private (int pct, Drawing.Color color) _lastSonnetState;
+    private (int pct, Drawing.Color color) _lastOverageState;
+
+    // Shared colors
+    private static readonly Drawing.Color ColorGray = Drawing.Color.FromArgb(156, 163, 175);
+    private static readonly Drawing.Color ColorRed = Drawing.Color.FromArgb(239, 68, 68);
+    private static readonly Drawing.Color ColorGreen = Drawing.Color.FromArgb(34, 197, 94);
+    private static readonly Drawing.Color ColorYellow = Drawing.Color.FromArgb(234, 179, 8);
+
+    // Window period durations
+    private const int FiveHourSeconds = 5 * 3600;
+    private const int SevenDaySeconds = 7 * 24 * 3600;
+
     // Adaptive polling
     private const int PollNormal = 420;       // 7 min
     private const int PollFast = 300;         // 5 min
@@ -44,6 +61,9 @@ public class App
     private const int PollFastExtra = 2;      // Extra fast polls after usage increase
     private const int MaxBackoff = 1200;      // 20 min max backoff
     private const int IdleThreshold = 600;    // 10 min idle before slow polling
+
+    // Shared font for icon rendering (reused across CreateUsageIcon calls)
+    private static readonly Drawing.Font IconFont = new("Segoe UI Semibold", 10, Drawing.FontStyle.Regular);
 
     private int _fastPollsRemaining;
     private int _consecutiveErrors;
@@ -63,12 +83,18 @@ public class App
         // Set up adaptive refresh timer
         _refreshTimer = new Timer(_ =>
         {
-            // Marshal back to the STA thread for UI work
-            _syncContext?.Post(async _ => await AdaptivePoll(), null);
+            // Marshal back to the STA thread for UI work.
+            // Wrap in try/catch because Post callback is async void.
+            _syncContext?.Post(async _ =>
+            {
+                try { await AdaptivePoll(); }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Poll error: {ex.Message}"); }
+            }, null);
         }, null, PollNormal * 1000, Timeout.Infinite);
 
         // Initial data fetch
-        await RefreshUsageData();
+        try { await RefreshUsageData(); }
+        catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Initial fetch error: {ex.Message}"); }
     }
 
     public void Shutdown()
@@ -92,14 +118,14 @@ public class App
         await RefreshUsageData();
 
         // Calculate next interval based on result
-        var nextInterval = isIdle ? PollIdle : CalculatePollInterval();
+        var nextInterval = CalculatePollInterval(isIdle);
         _refreshTimer!.Change(nextInterval * 1000, Timeout.Infinite);
 
         System.Diagnostics.Debug.WriteLine(
             $"Adaptive poll: next in {nextInterval}s (fast={_fastPollsRemaining}, errors={_consecutiveErrors}, idle={isIdle})");
     }
 
-    private int CalculatePollInterval()
+    private int CalculatePollInterval(bool isIdle)
     {
         // Error backoff
         if (_consecutiveErrors > 0)
@@ -108,8 +134,7 @@ public class App
             return Math.Min(backoff, MaxBackoff);
         }
 
-        // Idle mode
-        if (IdleHelper.IsUserAway(IdleThreshold))
+        if (isIdle)
             return PollIdle;
 
         // Fast polling after usage increase
@@ -172,16 +197,19 @@ public class App
         g.FillPath(bgBrush, path);
 
         // Draw percentage number centered
-        using var textFont = new Drawing.Font("Segoe UI Semibold", 10, Drawing.FontStyle.Regular);
         using var textBrush = new Drawing.SolidBrush(Drawing.Color.White);
 
         var text = percentage.ToString();
-        var textSize = g.MeasureString(text, textFont);
+        var textSize = g.MeasureString(text, IconFont);
         var textX = (size - textSize.Width) / 2 + 1;
         var textY = (size - textSize.Height) / 2 + 1;
-        g.DrawString(text, textFont, textBrush, textX, textY);
+        g.DrawString(text, IconFont, textBrush, textX, textY);
 
-        return Drawing.Icon.FromHandle(bitmap.GetHicon());
+        // Icon.FromHandle does NOT own the HICON — we must clone and destroy.
+        var hIcon = bitmap.GetHicon();
+        var icon = (Drawing.Icon)Drawing.Icon.FromHandle(hIcon).Clone();
+        DestroyIcon(hIcon);
+        return icon;
     }
 
     private Drawing.Color GetColorForUsageElapsed(double utilizationPercent, double elapsedPercent)
@@ -190,93 +218,74 @@ public class App
         var adjustedElapsed = double.Max(1, elapsedPercent);
         var ratio = adjustedUtilization / adjustedElapsed;
         if (ratio > 1.1 || adjustedUtilization > 95)
-            return Drawing.Color.FromArgb(239, 68, 68); // Red — over pace
+            return ColorRed;
         if (ratio < 0.9)
-            return Drawing.Color.FromArgb(34, 197, 94); // Green — under pace
-        return Drawing.Color.FromArgb(234, 179, 8);     // Yellow — on track
+            return ColorGreen;
+        return ColorYellow;
+    }
+
+    /// <summary>
+    /// Swap a tray icon only if the percentage or color has changed.
+    /// </summary>
+    private void SwapIcon(ref Drawing.Icon? iconField, ref (int pct, Drawing.Color color) lastState,
+        TrayIconWithContextMenu tray, int pct, Drawing.Color color)
+    {
+        if (lastState.pct == pct && lastState.color == color && iconField != null)
+            return;
+
+        var old = iconField;
+        iconField = CreateUsageIcon(pct, color);
+        tray.UpdateIcon(iconField.Handle);
+        old?.Dispose();
+        lastState = (pct, color);
     }
 
     private void UpdateTrayIconError()
     {
-        var gray = Drawing.Color.FromArgb(156, 163, 175);
-
-        var oldIcon = _currentIcon;
-        _currentIcon = CreateUsageIcon(0, gray);
-        _trayIcon!.UpdateIcon(_currentIcon.Handle);
-        oldIcon?.Dispose();
-
-        var oldWeeklyIcon = _weeklyIcon;
-        _weeklyIcon = CreateUsageIcon(0, gray);
-        _weeklyTrayIcon!.UpdateIcon(_weeklyIcon.Handle);
-        oldWeeklyIcon?.Dispose();
-
+        SwapIcon(ref _currentIcon, ref _lastSessionState, _trayIcon!, 0, ColorGray);
+        SwapIcon(ref _weeklyIcon, ref _lastWeeklyState, _weeklyTrayIcon!, 0, ColorGray);
         if (_sonnetTrayIcon != null)
-        {
-            var oldSonnetIcon = _sonnetIcon;
-            _sonnetIcon = CreateUsageIcon(0, gray);
-            _sonnetTrayIcon.UpdateIcon(_sonnetIcon.Handle);
-            oldSonnetIcon?.Dispose();
-        }
+            SwapIcon(ref _sonnetIcon, ref _lastSonnetState, _sonnetTrayIcon, 0, ColorGray);
         if (_overageTrayIcon != null)
-        {
-            var oldOverageIcon = _overageIcon;
-            _overageIcon = CreateUsageIcon(0, gray);
-            _overageTrayIcon.UpdateIcon(_overageIcon.Handle);
-            oldOverageIcon?.Dispose();
-        }
+            SwapIcon(ref _overageIcon, ref _lastOverageState, _overageTrayIcon, 0, ColorGray);
     }
 
     private void UpdateTrayIcon()
     {
         if (_lastUsageData == null) return;
 
+        var showDetails = StartupHelper.GetShowDetails();
+
         // Update session icon
         var sessionWindow = _lastUsageData.FiveHour;
         var sessionUtilPct = sessionWindow?.Utilization ?? 0;
-        var sessionElapsedPct = sessionWindow?.GetElapsedPercent(5 * 3600) ?? 0;
-        var sessionColor = GetColorForUsageElapsed(sessionUtilPct, sessionElapsedPct);
-
-        var oldIcon = _currentIcon;
-        _currentIcon = CreateUsageIcon((int)sessionUtilPct, sessionColor);
-        _trayIcon!.UpdateIcon(_currentIcon.Handle);
-        oldIcon?.Dispose();
+        var sessionElapsedPct = sessionWindow?.GetElapsedPercent(FiveHourSeconds) ?? 0;
+        SwapIcon(ref _currentIcon, ref _lastSessionState, _trayIcon!,
+            (int)sessionUtilPct, GetColorForUsageElapsed(sessionUtilPct, sessionElapsedPct));
 
         // Update weekly icon
         var weeklyWindow = _lastUsageData.SevenDay;
         var weeklyUtilPct = weeklyWindow?.Utilization ?? 0;
-        var weeklyElapsedPct = weeklyWindow?.GetElapsedPercent(7 * 24 * 3600) ?? 0;
-        var weeklyColor = GetColorForUsageElapsed(weeklyUtilPct, weeklyElapsedPct);
-
-        var oldWeeklyIcon = _weeklyIcon;
-        _weeklyIcon = CreateUsageIcon((int)weeklyUtilPct, weeklyColor);
-        _weeklyTrayIcon!.UpdateIcon(_weeklyIcon.Handle);
-        oldWeeklyIcon?.Dispose();
+        var weeklyElapsedPct = weeklyWindow?.GetElapsedPercent(SevenDaySeconds) ?? 0;
+        SwapIcon(ref _weeklyIcon, ref _lastWeeklyState, _weeklyTrayIcon!,
+            (int)weeklyUtilPct, GetColorForUsageElapsed(weeklyUtilPct, weeklyElapsedPct));
 
         // Update sonnet icon (if visible)
-        if (_sonnetTrayIcon != null && StartupHelper.GetShowDetails())
+        if (_sonnetTrayIcon != null && showDetails)
         {
             var sonnetWindow = _lastUsageData.Sonnet;
             var sonnetUtilPct = sonnetWindow?.Utilization ?? 0;
-            var sonnetElapsedPct = sonnetWindow?.GetElapsedPercent(7 * 24 * 3600) ?? 0;
-            var sonnetColor = GetColorForUsageElapsed(sonnetUtilPct, sonnetElapsedPct);
-
-            var oldSonnetIcon = _sonnetIcon;
-            _sonnetIcon = CreateUsageIcon((int)sonnetUtilPct, sonnetColor);
-            _sonnetTrayIcon.UpdateIcon(_sonnetIcon.Handle);
-            oldSonnetIcon?.Dispose();
+            var sonnetElapsedPct = sonnetWindow?.GetElapsedPercent(SevenDaySeconds) ?? 0;
+            SwapIcon(ref _sonnetIcon, ref _lastSonnetState, _sonnetTrayIcon,
+                (int)sonnetUtilPct, GetColorForUsageElapsed(sonnetUtilPct, sonnetElapsedPct));
         }
 
         // Update overage icon (if visible)
-        if (_overageTrayIcon != null && StartupHelper.GetShowDetails() && _lastUsageData.ExtraUsage != null)
+        if (_overageTrayIcon != null && showDetails && _lastUsageData.ExtraUsage != null)
         {
-            var extra = _lastUsageData.ExtraUsage;
-            var overageUtilPct = extra.Utilization ?? 0;
-            var overageColor = GetColorForUsageElapsed(overageUtilPct, 50); // Assume 50% elapsed as baseline
-
-            var oldOverageIcon = _overageIcon;
-            _overageIcon = CreateUsageIcon((int)overageUtilPct, overageColor);
-            _overageTrayIcon.UpdateIcon(_overageIcon.Handle);
-            oldOverageIcon?.Dispose();
+            var overageUtilPct = _lastUsageData.ExtraUsage.Utilization ?? 0;
+            SwapIcon(ref _overageIcon, ref _lastOverageState, _overageTrayIcon,
+                (int)overageUtilPct, GetColorForUsageElapsed(overageUtilPct, 50));
         }
     }
 
@@ -290,10 +299,10 @@ public class App
 
     private void CreateTrayIcon()
     {
-        _currentIcon = CreateUsageIcon(0, Drawing.Color.FromArgb(156, 163, 175)); // Gray
-        _weeklyIcon = CreateUsageIcon(0, Drawing.Color.FromArgb(156, 163, 175)); // Gray
-        _sonnetIcon = CreateUsageIcon(0, Drawing.Color.FromArgb(156, 163, 175));
-        _overageIcon = CreateUsageIcon(0, Drawing.Color.FromArgb(156, 163, 175));
+        _currentIcon = CreateUsageIcon(0, ColorGray);
+        _weeklyIcon = CreateUsageIcon(0, ColorGray);
+        _sonnetIcon = CreateUsageIcon(0, ColorGray);
+        _overageIcon = CreateUsageIcon(0, ColorGray);
 
         // Create session (5-hour) tray icon
         _trayIcon = new TrayIconWithContextMenu("ClaudeUsage.Session")
@@ -344,26 +353,29 @@ public class App
         _overageTrayIcon.Create();
     }
 
-    private void CreateWeeklyContextMenu()
-    {
-        var refreshItem = new PopupMenuItem(LocalizationService.T("refresh_now"), async (s, e) =>
+    private PopupMenuItem CreateRefreshMenuItem() =>
+        new(LocalizationService.T("refresh_now"), async (s, e) =>
         {
-            await Task.Run(() => _ = RefreshUsageData());
+            try { await RefreshUsageData(); }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Refresh error: {ex.Message}"); }
         });
 
-        var exitItem = new PopupMenuItem(LocalizationService.T("exit"), (s, e) =>
+    private PopupMenuItem CreateExitMenuItem() =>
+        new(LocalizationService.T("exit"), (s, e) =>
         {
             RemoveAllTrayIcons();
             PostQuitMessage(0);
         });
 
+    private void CreateWeeklyContextMenu()
+    {
         _weeklyContextMenu = new PopupMenu
         {
             Items =
             {
-                refreshItem,
+                CreateRefreshMenuItem(),
                 new PopupMenuSeparator(),
-                exitItem
+                CreateExitMenuItem()
             }
         };
 
@@ -372,10 +384,7 @@ public class App
 
     private void CreateContextMenu()
     {
-        var refreshItem = new PopupMenuItem(LocalizationService.T("refresh_now"), async (s, e) =>
-        {
-            await Task.Run(() => _ = RefreshUsageData());
-        });
+        var refreshItem = CreateRefreshMenuItem();
 
         _launchAtLoginItem = new PopupMenuItem(LocalizationService.T("launch_at_login"), (s, e) =>
         {
@@ -416,11 +425,7 @@ public class App
             Checked = StartupHelper.GetShowDetails()
         };
 
-        var exitItem = new PopupMenuItem(LocalizationService.T("exit"), (s, e) =>
-        {
-            RemoveAllTrayIcons();
-            PostQuitMessage(0);
-        });
+        var exitItem = CreateExitMenuItem();
 
         // Language submenu
         var languageItems = new List<PopupMenuItem>();
@@ -459,14 +464,20 @@ public class App
         _trayIcon!.ContextMenu = _contextMenu;
     }
 
+    private void HandleFetchError(string localizationKey)
+    {
+        _consecutiveErrors++;
+        UpdateTrayIconError();
+        var msg = LocalizationService.T(localizationKey);
+        _trayIcon!.UpdateToolTip($"Claude Session - {msg}");
+        _weeklyTrayIcon!.UpdateToolTip($"Claude Weekly - {msg}");
+    }
+
     public async Task RefreshUsageData()
     {
         if (!CredentialService.CredentialsExist())
         {
-            _consecutiveErrors++;
-            UpdateTrayIconError();
-            _trayIcon!.UpdateToolTip($"Claude Session - {LocalizationService.T("no_credentials")}");
-            _weeklyTrayIcon!.UpdateToolTip($"Claude Weekly - {LocalizationService.T("no_credentials")}");
+            HandleFetchError("no_credentials");
             return;
         }
 
@@ -474,10 +485,7 @@ public class App
 
         if (usage == null)
         {
-            _consecutiveErrors++;
-            UpdateTrayIconError();
-            _trayIcon!.UpdateToolTip($"Claude Session - {LocalizationService.T("failed_to_fetch")}");
-            _weeklyTrayIcon!.UpdateToolTip($"Claude Weekly - {LocalizationService.T("failed_to_fetch")}");
+            HandleFetchError("failed_to_fetch");
             return;
         }
 
@@ -506,14 +514,15 @@ public class App
         _weeklyTrayIcon!.UpdateToolTip($"Claude Weekly\n{LocalizationService.T("tooltip_weekly", weeklyPct, weeklyReset)}");
 
         // Update sonnet and overage tooltips if visible
-        if (_sonnetTrayIcon != null && StartupHelper.GetShowDetails())
+        var showDetails = StartupHelper.GetShowDetails();
+        if (_sonnetTrayIcon != null && showDetails)
         {
             var sonnetPct = usage.Sonnet?.UtilizationPercent ?? 0;
             var sonnetReset = usage.Sonnet?.TimeUntilReset ?? "N/A";
             _sonnetTrayIcon.UpdateToolTip($"Claude Sonnet\n{sonnetPct}% used\nReset: {sonnetReset}");
         }
 
-        if (_overageTrayIcon != null && StartupHelper.GetShowDetails() && usage.ExtraUsage != null)
+        if (_overageTrayIcon != null && showDetails && usage.ExtraUsage != null)
         {
             var overagePct = usage.ExtraUsage.UtilizationPercent;
             var overageUsed = usage.ExtraUsage.UsedDollars;

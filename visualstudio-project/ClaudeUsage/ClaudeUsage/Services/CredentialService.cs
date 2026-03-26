@@ -137,7 +137,7 @@ public class CredentialService
                 return null;
             }
 
-            var json = File.ReadAllText(credentialsPath);
+            var json = await File.ReadAllTextAsync(credentialsPath);
             var credentials = JsonSerializer.Deserialize<CredentialsFile>(json);
 
             if (credentials?.ClaudeAiOauth == null)
@@ -180,7 +180,7 @@ public class CredentialService
 
         try
         {
-            var request = new HttpRequestMessage(HttpMethod.Post, TokenRefreshUrl);
+            using var request = new HttpRequestMessage(HttpMethod.Post, TokenRefreshUrl);
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
             var formData = new Dictionary<string, string>
@@ -254,10 +254,6 @@ public class CredentialService
         return File.Exists(GetWindowsNativePath());
     }
 
-    public static string? GetCredentialsPath()
-    {
-        return _cachedCredentialsPath;
-    }
 }
 
 public class TokenRefreshResponse

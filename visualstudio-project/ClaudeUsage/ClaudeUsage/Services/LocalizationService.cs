@@ -10,6 +10,7 @@ public static class LocalizationService
     private static Dictionary<string, string> _strings = new();
     private static Dictionary<string, string> _fallback = new();
     private static string _currentLang = "en";
+    private static string[]? _cachedResourceNames;
 
     // Language code → display name mapping
     public static readonly (string Code, string DisplayName)[] SupportedLanguages =
@@ -104,12 +105,15 @@ public static class LocalizationService
         return "en";
     }
 
+    private static string[] GetResourceNames()
+    {
+        return _cachedResourceNames ??= Assembly.GetExecutingAssembly().GetManifestResourceNames();
+    }
+
     private static bool HasLanguage(string code)
     {
-        var assembly = Assembly.GetExecutingAssembly();
-        var resourceName = assembly.GetManifestResourceNames()
-            .FirstOrDefault(r => r.EndsWith($".Locale.{code}.json", StringComparison.OrdinalIgnoreCase));
-        return resourceName != null;
+        return GetResourceNames()
+            .Any(r => r.EndsWith($".Locale.{code}.json", StringComparison.OrdinalIgnoreCase));
     }
 
     private static Dictionary<string, string> LoadLanguage(string code)
@@ -117,7 +121,7 @@ public static class LocalizationService
         try
         {
             var assembly = Assembly.GetExecutingAssembly();
-            var resourceName = assembly.GetManifestResourceNames()
+            var resourceName = GetResourceNames()
                 .FirstOrDefault(r => r.EndsWith($".Locale.{code}.json", StringComparison.OrdinalIgnoreCase));
 
             if (resourceName == null)
