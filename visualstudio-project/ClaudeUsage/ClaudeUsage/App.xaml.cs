@@ -15,10 +15,8 @@ public partial class App : System.Windows.Application
     private TrayIconWithContextMenu? _weeklyTrayIcon;
     private TrayIconWithContextMenu? _sonnetTrayIcon;
     private TrayIconWithContextMenu? _overageTrayIcon;
-    private MainWindow? _mainWindow;
     private DispatcherTimer? _refreshTimer;
     private UsageData? _lastUsageData;
-    private DateTime _lastUpdated;
     private PopupMenu? _contextMenu;
     private PopupMenu? _weeklyContextMenu;
     private PopupMenuItem? _launchAtLoginItem;
@@ -58,14 +56,6 @@ public partial class App : System.Windows.Application
 
         // Create the tray icon
         CreateTrayIcon();
-
-        // Create the main window (hidden initially)
-        _mainWindow = new MainWindow();
-        _mainWindow.SetShowDetails(StartupHelper.GetShowDetails());
-        _mainWindow.Deactivated += (s, args) =>
-        {
-            _mainWindow.HideWithAnimation();
-        };
 
         // Set up adaptive refresh timer
         _refreshTimer = new DispatcherTimer
@@ -272,7 +262,7 @@ public partial class App : System.Windows.Application
 
     private Drawing.Color GetColorForUsageElapsed(double utilizationPercent, double elapsedPercent)
     {
-        var adjustedUtilization = double.Max(0, utilizationPercent - 10) / 0.9;
+        var adjustedUtilization = double.Max(0, utilizationPercent - 10) / 90.0 * 100;
         var adjustedElapsed = double.Max(1, elapsedPercent);
         var ratio = adjustedUtilization / adjustedElapsed;
         if (ratio > 1.1 || adjustedUtilization > 95)
@@ -372,7 +362,15 @@ public partial class App : System.Windows.Application
         }
     }
 
-private void CreateTrayIcon()
+    private void RemoveAllTrayIcons()
+    {
+        _trayIcon?.Remove();
+        _weeklyTrayIcon?.Remove();
+        _sonnetTrayIcon?.Remove();
+        _overageTrayIcon?.Remove();
+    }
+
+    private void CreateTrayIcon()
     {
         _currentIcon = CreateUsageIcon(0, Drawing.Color.FromArgb(156, 163, 175)); // Gray
         _weeklyIcon = CreateUsageIcon(0, Drawing.Color.FromArgb(156, 163, 175)); // Gray
@@ -399,14 +397,11 @@ private void CreateTrayIcon()
         CreateWeeklyContextMenu();
         _weeklyTrayIcon.Create();
         
-        // Create sonnet and overage icons (only visible when "Show Details" is enabled)
-        CreateSonnetTrayIcon();
-        CreateOverageTrayIcon();
-        
-        if (!StartupHelper.GetShowDetails())
+        // Create sonnet and overage icons only when "Show Details" is enabled
+        if (StartupHelper.GetShowDetails())
         {
-            _sonnetTrayIcon?.Remove();
-            _overageTrayIcon?.Remove();
+            CreateSonnetTrayIcon();
+            CreateOverageTrayIcon();
         }
     }
     
@@ -428,8 +423,7 @@ private void CreateTrayIcon()
             Icon = _overageIcon!.Handle,
             ToolTip = "Claude Overage - Loading..."
         };
-        
-_overageTrayIcon.Create();
+        _overageTrayIcon.Create();
     }
     
     private void CreateWeeklyContextMenu()
@@ -441,8 +435,7 @@ _overageTrayIcon.Create();
         
         var exitItem = new PopupMenuItem(LocalizationService.T("exit"), (s, e) =>
         {
-            _trayIcon?.Remove();
-            _weeklyTrayIcon?.Remove();
+            RemoveAllTrayIcons();
             Dispatcher.Invoke(() => Shutdown());
         });
 
@@ -455,6 +448,8 @@ _overageTrayIcon.Create();
                 exitItem
             }
         };
+
+        _weeklyTrayIcon!.ContextMenu = _weeklyContextMenu;
     }
 
     private void CreateContextMenu()
@@ -492,10 +487,12 @@ _overageTrayIcon.Create();
             {
                 // Hide sonnet and overage icons
                 _sonnetTrayIcon?.Remove();
+                _sonnetTrayIcon?.Dispose();
+                _sonnetTrayIcon = null;
                 _overageTrayIcon?.Remove();
+                _overageTrayIcon?.Dispose();
+                _overageTrayIcon = null;
             }
-            
-            Dispatcher.Invoke(() => _mainWindow?.SetShowDetails(showDetails));
         })
         {
             Checked = StartupHelper.GetShowDetails()
@@ -503,7 +500,7 @@ _overageTrayIcon.Create();
 
         var exitItem = new PopupMenuItem(LocalizationService.T("exit"), (s, e) =>
         {
-            _trayIcon?.Remove();
+            RemoveAllTrayIcons();
             Dispatcher.Invoke(() => Shutdown());
         });
 
@@ -516,14 +513,8 @@ _overageTrayIcon.Create();
             {
                 LocalizationService.SetLanguage(langCode);
                 StartupHelper.SaveLanguage(langCode);
-                // Rebuild menu and refresh UI with new language
+                // Rebuild menu with new language
                 CreateContextMenu();
-                Dispatcher.Invoke(() =>
-                {
-                    _mainWindow?.ApplyLocalization();
-                    if (_lastUsageData != null)
-                        _mainWindow?.UpdateUsageData(_lastUsageData, _lastUpdated);
-                });
             });
             languageItems.Add(langItem);
         }
@@ -584,7 +575,6 @@ _overageTrayIcon.Create();
         _previousFiveHourPct = currentPct;
 
         _lastUsageData = usage;
-        _lastUpdated = DateTime.Now;
 
         UpdateTrayIcon();
 
@@ -613,17 +603,10 @@ _overageTrayIcon.Create();
             _overageTrayIcon.UpdateToolTip($"Claude Overage\n{overagePct}% used\n${overageUsed:F2} / ${overageLimit:F2}");
         }
 
-        // Update popup if visible
-        if (_mainWindow?.IsVisible == true)
-        {
-            _mainWindow.UpdateUsageData(_lastUsageData, _lastUpdated);
-        }
     }
 
     protected override void OnExit(System.Windows.ExitEventArgs e)
     {
-        try { if (_mainWindow != null) SystemThemeWatcher.UnWatch(_mainWindow); }
-        catch (InvalidOperationException) { /* window handle already destroyed */ }
         ApplicationThemeManager.Changed -= OnThemeChanged;
         _trayIcon?.Dispose();
         _weeklyTrayIcon?.Dispose();
