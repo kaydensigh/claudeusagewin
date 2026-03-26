@@ -24,11 +24,13 @@ public class UsageApiService
             var version = TryGetVersionFromProcess("claude", "--version")
                        ?? TryGetVersionFromProcess("wsl", "claude --version");
 
-            _cachedClaudeCodeVersion = version ?? "1.0.0";
+            _cachedClaudeCodeVersion = version ?? "2.1.0";
+            System.Diagnostics.Debug.WriteLine($"Claude Code version detected: {_cachedClaudeCodeVersion}");
         }
         catch
         {
-            _cachedClaudeCodeVersion = "1.0.0";
+            _cachedClaudeCodeVersion = "2.1.0";
+            System.Diagnostics.Debug.WriteLine("Claude Code version detection failed, using fallback 2.1.0");
         }
 
         return _cachedClaudeCodeVersion;
@@ -92,6 +94,8 @@ public class UsageApiService
                 request.Headers.Add("User-Agent", $"claude-code/{claudeVersion}");
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
                 request.Headers.Add("anthropic-beta", "oauth-2025-04-20");
+
+                System.Diagnostics.Debug.WriteLine($"Request: User-Agent=claude-code/{claudeVersion}, Token={token?[..Math.Min(20, token.Length)]}...");
 
                 var response = await _httpClient.SendAsync(request);
 
