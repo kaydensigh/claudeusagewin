@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A native Windows system tray app that monitors Claude Code API rate limits in real time. Single-file ~6MB executable built with .NET 8 + WPF + Fluent Design (WPF-UI).
+A native Windows system tray app that monitors Claude Code API rate limits in real time. Displays up to 4 tray icons (session, weekly, sonnet, overage) with live percentage text and color-coded status. Single-file executable built with .NET 10 + Native AOT + H.NotifyIcon.
 
 ## Build & Run
 
@@ -19,12 +19,12 @@ dotnet build
 # Release build
 dotnet build -c Release
 
-# Publish single-file exe
-dotnet publish -c Release -r win-x64 --self-contained false /p:PublishSingleFile=true
-# Output: bin/Release/net8.0-windows/win-x64/publish/ClaudeUsage.exe
+# Publish single-file exe (Native AOT)
+dotnet publish -c Release -r win-x64
+# Output: bin/Release/net10.0-windows/win-x64/publish/ClaudeUsage.exe
 ```
 
-**Requirements:** .NET 8.0 Runtime, Windows 10/11 x64
+**Requirements:** .NET 10.0 Runtime, Windows 10/11 x64
 
 **No test suite exists.** Testing is manual.
 
@@ -32,12 +32,10 @@ dotnet publish -c Release -r win-x64 --self-contained false /p:PublishSingleFile
 
 ```
 visualstudio-project/ClaudeUsage/ClaudeUsage/
-├── App.xaml.cs              # Entry point, tray icon, polling timer, theme sync
-├── MainWindow.xaml(.cs)     # Detail popup with gauges, cards, animations
-├── Controls/
-│   └── UsageGauge.cs        # Custom speedometer gauge (native WPF DrawingContext)
+├── Program.cs               # Win32 message pump entry point (GetMessage loop)
+├── App.cs                   # Tray icons, polling timer, context menu, icon rendering
 ├── Models/
-│   └── UsageData.cs         # API response model with JSON deserialization
+│   └── UsageData.cs         # API response model with source-generated JSON serialization
 ├── Services/
 │   ├── CredentialService.cs # OAuth token discovery (native Windows + WSL) & refresh
 │   ├── LocalizationService.cs # 14-language JSON-based i18n
@@ -50,11 +48,14 @@ visualstudio-project/ClaudeUsage/ClaudeUsage/
 
 ## Architecture & Key Patterns
 
-- **Async/await everywhere** — never block the UI thread for I/O
+- **Raw Win32 message pump** — no WPF or WinForms dependency; `Program.cs` runs `GetMessage`/`TranslateMessage`/`DispatchMessage` directly
+- **Async/await everywhere** — never block the UI thread for I/O; timer fires on thread pool, marshaled back via `SynchronizationContext.Post()`
 - **Adaptive polling** — 7min normal, 5min fast (usage increasing), 20min idle; aligns to quota resets
-- **Exponential backoff** — up to 5 retries (1s, 2s, 4s, 8s, 16s) on HTTP errors
-- **Credential caching** — 30min TTL; WSL path scan uses 3s timeout to avoid hangs
-- **Token auto-refresh** — refreshes within 5min of expiry
+- **Exponential backoff** — up to 5 retries (1s, 2s, 4s, 8s, 16s) on HTTP 429/5xx errors
+- **Credential caching** — 30min TTL; WSL path scan uses 5s timeout to avoid hangs
+- **Token auto-refresh** — refreshes within 5min of expiry via `https://console.anthropic.com/v1/oauth/token`
+- **Native AOT** — source-generated JSON serialization via `[JsonSerializable]` context for AOT compatibility
+- **Icon rendering** — `System.Drawing.Graphics` draws percentage text onto bitmap icons; proper `DestroyIcon()` cleanup to avoid HICON leaks
 - **API:** `GET https://api.anthropic.com/api/oauth/usage` with `anthropic-beta: oauth-2025-04-20` header (undocumented, may change)
 
 ## Code Conventions
@@ -64,19 +65,16 @@ visualstudio-project/ClaudeUsage/ClaudeUsage/
 - File-scoped namespaces (`namespace ClaudeUsage.Services;`)
 - `[JsonPropertyName("snake_case")]` for API mapping
 - Localization via `LocalizationService.T("key")` or `LocalizationService.T("key", args...)`
-- UI rendering uses WPF `DrawingContext` (not SkiaSharp) for smaller exe size
-- Theme changes via `ApplicationThemeManager.Changed` event
+- Icon rendering uses `System.Drawing.Graphics` (not SkiaSharp/WPF) for minimal dependencies
 
 ## When Modifying
 
 - **New service/helper:** Follow existing folder structure (Services/, Helpers/, Models/)
 - **New locale key:** Must be added to all 14 JSON files in `Locale/`
-- **UI controls:** Prefer `DrawingContext` over SkiaSharp; use DependencyProperty for data binding
 - **Credential paths:** Native = `%USERPROFILE%\.claude\.credentials.json`; WSL = `\\wsl$\{distro}\home\{user}\.claude\.credentials.json`
 - **Registry:** Startup at `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`; settings at `HKCU\SOFTWARE\ClaudeUsage`
+- **JSON models:** Use source-generated serialization (`AppJsonContext`) for Native AOT compatibility
 
 ## NuGet Dependencies
 
-- `WPF-UI 3.0.5` — Fluent Design (Mica, themes)
-- `Svg.NET 3.4.7` — SVG tray icon rendering
-- `System.Text.Json 8.0.5` — JSON parsing
+- `H.NotifyIcon 2.4.1` — system tray icon management (no WinForms dependency)

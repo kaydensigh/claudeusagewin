@@ -2,9 +2,9 @@
 
 Monitor your Claude Code rate limits in real time right from your Windows system tray.
 
-A native Windows tray app that shows your Claude usage at a glance. 
+A native Windows tray app that shows your Claude usage at a glance.
 
-Lightweight (~6 MB single EXE) and fast native .NET app with Fluent Design UI. Works with both **Claude Code native for Windows** and **Claude Code in WSL**. 
+Lightweight single EXE, no installation, no Electron, no Python. Works with both **Claude Code native for Windows** and **Claude Code in WSL**.
 
 Rate limits are shared across claude.ai, Claude Code, and its IDE extensions, so you always know how much of your session and weekly limits you have left.
 
@@ -12,25 +12,22 @@ Rate limits are shared across claude.ai, Claude Code, and its IDE extensions, so
 
 ## Features
 
-- **Native & lightweight** — single EXE (~6 MB), no installation, no Electron, no Python. Download and run
+- **Native & lightweight** — single EXE, no installation. Download and run
 - **Zero configuration** — authenticates through your existing Claude Code login. No API key, no manual token entry
-- **Speedometer gauges** — beautiful gauges with gradient arcs (green/orange/red), animated needle, tick marks, and percentage display
-- **Time marker** — white line on each gauge showing elapsed time in the current period, so you can instantly see whether your usage is ahead of or behind the limit
-- **Live tray icon** with dynamic SVG icons showing usage percentage (0-100%), color-coded status dot, and theme-aware colors for light and dark taskbars
-- **Detail popup** (left-click) — Session gauge (5h window), Weekly gauge (7d window), plus collapsible Sonnet Only and Overage cards with gradient progress bars
+- **Up to 4 tray icons** — Session (5h), Weekly (7d), Sonnet Only, and Overage usage, each showing a live percentage with color-coded status
+- **Color-coded status** — green (under pace), yellow (normal), red (high usage or >95%), gray (error/no data)
 - **Smart credential discovery** — automatically finds credentials from Claude Code native for Windows or WSL distros (Debian, Ubuntu, etc.), picking the most recently used installation when both exist
-- **WSL availability guard** — WSL paths are skipped with a 3-second timeout if WSL isn't running, so native-only users experience zero startup delay
-- **Fluent Design UI** — Windows 11 Mica backdrop, rounded corners, smooth slide-up animation, collapsible sections, auto-sizing window
-- **Dark & light theme** — automatically follows your Windows theme in real time
+- **WSL availability guard** — WSL paths are skipped with a timeout if WSL isn't running, so native-only users experience zero startup delay
 - **14 languages** — English, German, French, Spanish, Portuguese, Italian, Japanese, Korean, Hindi, Indonesian, Chinese Simplified, Chinese Traditional, Polish, Russian — auto-detected from your Windows display language, with manual override from the context menu
-- **Adaptive polling** — speeds up during active usage (5 min), normal interval (7 min), slows down when idle (20 min), aligns to imminent quota resets, and backs off on rate-limit errors with exponential backoff
-- **Required API headers** — sends the `claude-code/*` User-Agent header (auto-detecting your installed Claude Code version) and `anthropic-beta` header
+- **Adaptive polling** — speeds up during active usage (5 min), normal interval (7 min), slows down when idle (20 min), aligns to imminent quota resets, and backs off on errors with exponential backoff
+- **Token auto-refresh** — automatically refreshes OAuth tokens before they expire
 - **Launch at Login** — optional Windows startup via the right-click context menu
+- **Show Details toggle** — right-click to show/hide Sonnet Only and Overage icons
 
 ## Requirements
 
 - Windows 10 or Windows 11 (64-bit)
-- [.NET 8.0 Runtime](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [.NET 10.0 Runtime](https://dotnet.microsoft.com/download/dotnet/10.0)
 - Claude Code installed and logged in (native Windows CLI, WSL, VS Code extension, or JetBrains plugin — any variant works). The app reads the OAuth token that Claude Code stores locally (`~/.claude/.credentials.json`).
 
 ## Quick Start
@@ -41,10 +38,8 @@ No build tools required. Download the latest `ClaudeUsage.exe` from the [Release
 
 | Action | What happens |
 |--------|-------------|
-| **Hover** over the tray icon | Tooltip shows session and weekly usage percentages with reset times |
-| **Left-click** the tray icon | Opens the detail popup with gauges, Sonnet/Overage cards, and reset countdowns |
-| **Right-click** the tray icon | Context menu: Refresh, Launch at Login, Language selector, Exit |
-| **Escape** or click outside | Closes the detail popup |
+| **Hover** over a tray icon | Tooltip shows usage percentage with reset time |
+| **Right-click** a tray icon | Context menu: Refresh Now, Show Details, Launch at Login, Language selector, Exit |
 
 ### Tray icon not visible?
 
@@ -63,7 +58,7 @@ The app automatically discovers your Claude Code OAuth credentials by searching 
 
 If credentials are found in both locations, the most recently modified file is used, so it automatically follows whichever Claude Code installation you're actively using.
 
-The app queries the Anthropic usage API with proper authentication headers and displays your current limits as speedometer gauges with live-updating countdowns and time markers.
+The app queries the Anthropic usage API with proper authentication headers and displays your current limits as color-coded tray icons with live-updating percentages and tooltips.
 
 > **Note:** This uses an undocumented API that could change at any time.
 
@@ -73,18 +68,18 @@ The app queries the Anthropic usage API with proper authentication headers and d
 2. Open `visualstudio-project/ClaudeUsage/ClaudeUsage.sln` in Visual Studio 2022
 3. Restore NuGet packages
 4. Build in Release mode
-5. Publish as single-file:
+5. Publish:
 ```
-dotnet publish -c Release -r win-x64 --self-contained false /p:PublishSingleFile=true
+dotnet publish -c Release -r win-x64
 ```
 
 ## Tech Stack
 
-- **C# / .NET 8** — native Windows performance, no interpreted runtime
-- **WPF** with [WPF-UI](https://github.com/lepoco/wpfui) — Fluent Design System (Mica, dark/light theme)
-- **WPF DrawingContext** — native hardware-accelerated gauge rendering (no SkiaSharp, zero extra native DLLs)
-- **[Svg.NET](https://github.com/svg-net/SVG)** — dynamic tray icon rendering
-- System.Windows.Forms.NotifyIcon — system tray integration
+- **C# / .NET 10** with **Native AOT** compilation
+- **Raw Win32 message pump** — minimal dependencies, no WPF or WinForms runtime
+- **[H.NotifyIcon](https://github.com/HarinezumiSama/H.NotifyIcon)** — system tray icon management
+- **System.Drawing** — programmatic icon rendering with percentage text
+- **Source-generated JSON** — AOT-compatible serialization via `System.Text.Json`
 
 ## License
 
