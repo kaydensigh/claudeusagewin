@@ -1,20 +1,31 @@
+using System.Runtime.InteropServices;
 using ClaudeUsage.Helpers;
 using ClaudeUsage.Models;
 using ClaudeUsage.Services;
 using Svg;
 using H.NotifyIcon.Core;
 using Drawing = System.Drawing;
-using Forms = System.Windows.Forms;
 
 namespace ClaudeUsage;
 
 public class App
 {
+    // Posts WM_QUIT to the message loop in Program.Main, causing GetMessage to
+    // return 0 and the app to exit cleanly. Replaces WinForms Application.Exit().
+    [DllImport("user32.dll")]
+    private static extern void PostQuitMessage(int nExitCode);
+
     private TrayIconWithContextMenu? _trayIcon;
     private TrayIconWithContextMenu? _weeklyTrayIcon;
     private TrayIconWithContextMenu? _sonnetTrayIcon;
     private TrayIconWithContextMenu? _overageTrayIcon;
-    private Forms.Timer? _refreshTimer;
+    // System.Threading.Timer fires on a thread-pool thread, so we capture the
+    // STA SynchronizationContext at startup and use Post() to marshal the callback
+    // back to the main thread where H.NotifyIcon expects to be called.
+    // The timer runs in one-shot mode (period = Timeout.Infinite); after each poll,
+    // AdaptivePoll reschedules it with Change() to the next computed interval.
+    private Timer? _refreshTimer;
+    private SynchronizationContext? _syncContext;
     private UsageData? _lastUsageData;
     private PopupMenu? _contextMenu;
     private PopupMenu? _weeklyContextMenu;
@@ -44,6 +55,8 @@ public class App
 
     public async void Start()
     {
+        _syncContext = SynchronizationContext.Current;
+
         // Initialize localization (saved preference or auto-detect)
         var savedLang = StartupHelper.GetSavedLanguage();
         LocalizationService.Initialize(savedLang);
@@ -52,12 +65,11 @@ public class App
         CreateTrayIcon();
 
         // Set up adaptive refresh timer
-        _refreshTimer = new Forms.Timer
+        _refreshTimer = new Timer(_ =>
         {
-            Interval = PollNormal * 1000
-        };
-        _refreshTimer.Tick += async (s, args) => await AdaptivePoll();
-        _refreshTimer.Start();
+            // Marshal back to the STA thread for UI work
+            _syncContext?.Post(async _ => await AdaptivePoll(), null);
+        }, null, PollNormal * 1000, Timeout.Infinite);
 
         // Initial data fetch
         await RefreshUsageData();
@@ -65,7 +77,6 @@ public class App
 
     public void Shutdown()
     {
-        _refreshTimer?.Stop();
         _refreshTimer?.Dispose();
         _trayIcon?.Dispose();
         _weeklyTrayIcon?.Dispose();
@@ -82,17 +93,11 @@ public class App
         // Check if user is idle/locked — use slower polling
         var isIdle = IdleHelper.IsUserAway(IdleThreshold);
 
-        if (isIdle)
-        {
-            _refreshTimer!.Interval = PollIdle * 1000;
-            // Still poll, just slower
-        }
-
         await RefreshUsageData();
 
         // Calculate next interval based on result
-        var nextInterval = CalculatePollInterval();
-        _refreshTimer!.Interval = nextInterval * 1000;
+        var nextInterval = isIdle ? PollIdle : CalculatePollInterval();
+        _refreshTimer!.Change(nextInterval * 1000, Timeout.Infinite);
 
         System.Diagnostics.Debug.WriteLine(
             $"Adaptive poll: next in {nextInterval}s (fast={_fastPollsRemaining}, errors={_consecutiveErrors}, idle={isIdle})");
@@ -435,7 +440,7 @@ public class App
         var exitItem = new PopupMenuItem(LocalizationService.T("exit"), (s, e) =>
         {
             RemoveAllTrayIcons();
-            Forms.Application.Exit();
+            PostQuitMessage(0);
         });
 
         _weeklyContextMenu = new PopupMenu
@@ -500,7 +505,7 @@ public class App
         var exitItem = new PopupMenuItem(LocalizationService.T("exit"), (s, e) =>
         {
             RemoveAllTrayIcons();
-            Forms.Application.Exit();
+            PostQuitMessage(0);
         });
 
         // Language submenu
