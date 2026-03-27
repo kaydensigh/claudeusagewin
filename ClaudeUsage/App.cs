@@ -81,15 +81,16 @@ public class App
         _refreshTimer = new Timer(async _ =>
         {
             try { await OnWake(); }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Wake error: {ex.Message}"); }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Wake error: {ex.Message}");
+                // Reschedule so the app doesn't silently freeze
+                try { ScheduleWake(RetryDelay); } catch { /* timer disposed */ }
+            }
         }, null, Timeout.Infinite, Timeout.Infinite);
 
         // Initial data fetch
-        try
-        {
-            if (await RefreshUsageData())
-                _lastSuccessfulRefresh = DateTimeOffset.UtcNow;
-        }
+        try { await RefreshUsageData(); }
         catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Initial fetch error: {ex.Message}"); }
 
         // Schedule first wake
@@ -168,7 +169,6 @@ public class App
     {
         if (await RefreshUsageData())
         {
-            _lastSuccessfulRefresh = DateTimeOffset.UtcNow;
             _consecutiveErrors = 0;
             _isRetryWake = false;
             ScheduleWake(WakeInterval);
@@ -491,8 +491,8 @@ public class App
         {
             try
             {
-                if (await RefreshUsageData())
-                    _lastSuccessfulRefresh = DateTimeOffset.UtcNow;
+                await RefreshUsageData();
+                RefreshTooltipTiming();
             }
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Refresh error: {ex.Message}"); }
         });
@@ -644,6 +644,8 @@ public class App
         var msg = LocalizationService.T(localizationKey);
         _trayIcon!.UpdateToolTip($"Claude Session - {msg}");
         _weeklyTrayIcon!.UpdateToolTip($"Claude Weekly - {msg}");
+        _sonnetTrayIcon?.UpdateToolTip($"Claude Sonnet - {msg}");
+        _overageTrayIcon?.UpdateToolTip($"Claude Overage - {msg}");
     }
 
     /// <summary>
@@ -663,10 +665,6 @@ public class App
         _lastSuccessfulRefresh = DateTimeOffset.UtcNow;
 
         UpdateTrayIcon();
-
-        // Tooltips are updated by ScheduleWake → RefreshTooltipTiming after caller reschedules.
-        // For manual refresh (no ScheduleWake follows), update now.
-        RefreshTooltipTiming();
 
         return true;
     }
