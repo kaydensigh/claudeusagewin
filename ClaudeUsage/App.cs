@@ -212,13 +212,20 @@ public class App
         return earliest.HasValue ? (int)earliest.Value + ResetBuffer : null;
     }
 
-    private static void DrawElapsedDot(Drawing.Graphics g, int iconSize, double elapsedPct)
+    private static void DrawBars(Drawing.Graphics g, int iconSize, int usagePercent, double elapsedPct)
     {
-        if (elapsedPct <= 0) return;
-        var dot = new Drawing.Rectangle(new(), new(2, iconSize));
-        dot.X = (int)((iconSize - 2 - dot.Width) * Math.Clamp(elapsedPct, 0, 100) / 100.0);
-        dot.Y = iconSize - 2 - dot.Height;
-        g.FillRectangle(Drawing.Brushes.Black, dot);
+        var barSize = new Drawing.Size(2, iconSize / 2);
+        if (usagePercent > 0)
+        {
+            var barX = (int)((iconSize - 2 - barSize.Width) * Math.Clamp(usagePercent, 0, 100) / 100.0);
+            g.FillRectangle(Drawing.Brushes.Black, barX, 0, barSize.Width, barSize.Height);
+        }
+        if (elapsedPct > 0)
+        {
+            var barX = (int)((iconSize - 2 - barSize.Width) * Math.Clamp(elapsedPct, 0, 100) / 100.0);
+            var barY = iconSize - 2 - barSize.Height;
+            g.FillRectangle(Drawing.Brushes.Black, barX, barY, barSize.Width, barSize.Height);
+        }
     }
 
     /// <summary>
@@ -241,7 +248,7 @@ public class App
         using var bgBrush = new Drawing.SolidBrush(bgColor);
         drawShape(g, bgBrush, rect);
 
-        DrawElapsedDot(g, size, elapsedPct);
+        DrawBars(g, size, percentage, elapsedPct);
 
         using var textBrush = new Drawing.SolidBrush(Drawing.Color.White);
         var text = percentage.ToString();
