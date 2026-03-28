@@ -1,15 +1,23 @@
 # Claude Usage Monitor for Windows
 
+## What this fork does
+
+**This fork keeps the full upstream behavior** — up to **four system tray icons** with live Claude Code usage % (session, weekly, optional Sonnet-only and overage), OAuth via your existing `~/.claude` login, WSL credential discovery, and the same tray menus — **and adds one new feature:**
+
+| New in this fork | What you get |
+|------------------|--------------|
+| **HUD overlay** | A tiny **always-on-top** strip (two color blocks: **session %** and **weekly %**) that sits **next to the system tray** like an FPS counter. Toggle from the tray, **drag to move**, **right-click for the same menu as the session icon**, position saved under `%LocalAppData%\ClaudeUsage\hud.json`. |
+
+**Stack:** .NET **9** (`net9.0-windows`), **WPF** for the overlay only; no Electron, no Python, single-folder `ClaudeUsage.exe`.
+
 > [!NOTE]
-> This repo is a **GitHub fork** of [sr-kai/claudeusagewin](https://github.com/sr-kai/claudeusagewin) (use **Fork** on that repo so your copy shows “forked from …” on GitHub). This fork keeps the lightweight tray design and adds an optional **HUD overlay** (small always-on-top session/weekly percentages). The app targets **.NET 9** on Windows (`net9.0-windows`).
+> **Lineage:** Fork of [sr-kai/claudeusagewin](https://github.com/sr-kai/claudeusagewin). Use GitHub’s **Fork** on that repo if you want the “forked from …” badge on your copy.
 
-Monitor Claude Code usage from your Windows system tray (and optionally a tiny on-screen overlay).
+Monitor Claude Code usage from the tray **and** optionally from the on-screen HUD.
 
-Lightweight, no installation, no Electron, no Python.
+Lightweight, no installer required. Works with **Claude Code for Windows** or **Claude Code in WSL**.
 
-Works with **Claude Code native for Windows** or **Claude Code in WSL**.
-
-![Claude Usage Screenshot](image.png)
+![HUD overlay next to the system tray (session % green, weekly % purple)](image.png)
 
 ## Features
 
