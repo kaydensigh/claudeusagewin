@@ -17,7 +17,9 @@ Monitor Claude Code usage from the tray **and** optionally from the on-screen HU
 
 Lightweight, no installer required. Works with **Claude Code for Windows** or **Claude Code in WSL**.
 
-![HUD overlay next to the system tray (session % green, weekly % purple)](image.png)
+*Screenshot: tray icons with hover tooltip (session %) and the optional **HUD** strip (session + weekly %) beside the system tray.*
+
+![Tray tooltip and HUD overlay](image.png)
 
 ## Features
 
