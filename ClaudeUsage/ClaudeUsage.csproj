@@ -2,7 +2,8 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net10.0-windows</TargetFramework>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationIcon>..\icons\claudeusagewin.ico</ApplicationIcon>
@@ -12,10 +13,18 @@
     <Description>Windows system tray app for monitoring Claude Code usage limits (native Windows and
       WSL)</Description>
 
-    <!-- Native AOT compilation -->
-    <PublishAot>true</PublishAot>
+    <!-- Native AOT is incompatible with WPF (AOT implies trimming; WPF is not trim-safe). -->
+    <PublishAot>false</PublishAot>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SupportedOSPlatformVersion>7.0</SupportedOSPlatformVersion>
+
+    <!-- End any running instance so the output exe is not locked (avoids MSB3026/MSB3027 when rebuilding from VS). -->
+    <KillRunningClaudeUsageBeforeBuild>true</KillRunningClaudeUsageBeforeBuild>
   </PropertyGroup>
+
+  <Target Name="StopRunningClaudeUsage" BeforeTargets="BeforeBuild" Condition="'$(KillRunningClaudeUsageBeforeBuild)' == 'true'">
+    <Exec Command="taskkill /F /IM ClaudeUsage.exe /T 2&gt;nul" IgnoreExitCode="true" />
+  </Target>
 
   <ItemGroup>
     <PackageReference Include="H.NotifyIcon" Version="2.4.1" />

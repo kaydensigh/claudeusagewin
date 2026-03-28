@@ -1,4 +1,7 @@
 using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Interop;
+using System.Windows.Media;
 using ClaudeUsage.Helpers;
 using ClaudeUsage.Models;
 using ClaudeUsage.Services;
@@ -15,6 +18,9 @@ public class App
     [DllImport("user32.dll")]
     private static extern bool DestroyIcon(IntPtr hIcon);
 
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
     private TrayIconWithContextMenu? _trayIcon;
     private TrayIconWithContextMenu? _weeklyTrayIcon;
     private TrayIconWithContextMenu? _sonnetTrayIcon;
@@ -29,6 +35,8 @@ public class App
     private PopupMenu? _weeklyContextMenu;
     private PopupMenuItem? _launchAtLoginItem;
     private PopupMenuItem? _showDetailsItem;
+    private HudWindow? _hudWindow;
+    private bool _displayHudError;
 
     private Drawing.Icon? _currentIcon;
     private Drawing.Icon? _weeklyIcon;
@@ -77,6 +85,8 @@ public class App
         // Create the tray icon
         CreateTrayIcon();
 
+        TryInitializeHud();
+
         // Set up wake timer (one-shot; OnWake reschedules after each cycle)
         _refreshTimer = new Timer(async _ =>
         {
@@ -108,6 +118,122 @@ public class App
         _weeklyIcon?.Dispose();
         _sonnetIcon?.Dispose();
         _overageIcon?.Dispose();
+        _hudWindow?.AllowClose();
+    }
+
+    /// <summary>Creates the optional HUD overlay; failures are logged and tray-only mode continues.</summary>
+    private void TryInitializeHud()
+    {
+        try
+        {
+            var settings = HudSettingsStore.Load();
+            _hudWindow = new HudWindow(settings, ShowTrayContextMenuFromHud);
+            _hudWindow.ApplyStartupPosition();
+            if (settings.Visible)
+                _hudWindow.Show();
+            else
+                _hudWindow.Visibility = Visibility.Hidden;
+            TryUpdateHud();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"HUD init failed: {ex.Message}");
+            _hudWindow = null;
+        }
+    }
+
+    /// <summary>Shows the session tray’s native popup menu at the pointer (HUD right-click).</summary>
+    private void ShowTrayContextMenuFromHud(double screenX, double screenY)
+    {
+        var hud = _hudWindow;
+        var menu = _contextMenu;
+        if (menu == null || hud == null) return;
+        try
+        {
+            void ShowMenu()
+            {
+                var hwnd = new WindowInteropHelper(hud).EnsureHandle();
+                SetForegroundWindow(hwnd);
+                hud.ReassertTopmostForShell();
+                menu.Show(hwnd, (int)Math.Round(screenX), (int)Math.Round(screenY));
+            }
+
+            if (hud.Dispatcher.CheckAccess())
+                ShowMenu();
+            else
+                hud.Dispatcher.Invoke(ShowMenu);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"HUD tray menu: {ex}");
+        }
+    }
+
+    /// <summary>Shows or hides the HUD from the tray menu.</summary>
+    private void ToggleHudOverlay()
+    {
+        if (_hudWindow == null) return;
+        try
+        {
+            // Tray context menus can run off the WPF UI thread; window calls must be marshalled.
+            var hud = _hudWindow;
+            if (hud.Dispatcher.CheckAccess())
+                hud.ToggleFromTray();
+            else
+                hud.Dispatcher.Invoke(hud.ToggleFromTray);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Toggle HUD: {ex}");
+        }
+    }
+
+    private static Color ToMediaColor(Drawing.Color c) =>
+        Color.FromArgb(c.A, c.R, c.G, c.B);
+
+    /// <summary>Updates HUD labels from the same usage state as the tray icons (marshals to the WPF thread).</summary>
+    private void TryUpdateHud()
+    {
+        if (_hudWindow == null) return;
+
+        string sessionText;
+        string weeklyText;
+        Drawing.Color sessionColor;
+        Drawing.Color weeklyColor;
+
+        if (_displayHudError)
+        {
+            sessionText = "0";
+            weeklyText = "0";
+            sessionColor = weeklyColor = ColorGray;
+        }
+        else if (_lastUsageData == null)
+        {
+            sessionText = "--";
+            weeklyText = "--";
+            sessionColor = weeklyColor = ColorGray;
+        }
+        else
+        {
+            var sessionWindow = _lastUsageData.FiveHour;
+            var sessionUtilPct = sessionWindow?.Utilization ?? 0;
+            var sessionElapsedPct = sessionWindow?.GetElapsedPercent(FiveHourSeconds) ?? 0;
+            sessionColor = GetColorForUsageElapsed(sessionUtilPct, sessionElapsedPct);
+            sessionText = ((int)sessionUtilPct).ToString();
+
+            var weeklyWindow = _lastUsageData.SevenDay;
+            var weeklyUtilPct = weeklyWindow?.Utilization ?? 0;
+            var weeklyElapsedPct = weeklyWindow?.GetElapsedPercent(SevenDaySeconds) ?? 0;
+            weeklyColor = IsWeeklyQuotaUnreachable(weeklyWindow)
+                ? ColorPurple
+                : GetColorForUsageElapsed(weeklyUtilPct, weeklyElapsedPct);
+            weeklyText = ((int)weeklyUtilPct).ToString();
+        }
+
+        var sm = ToMediaColor(sessionColor);
+        var wm = ToMediaColor(weeklyColor);
+        _hudWindow.Dispatcher.BeginInvoke(() =>
+            _hudWindow?.SetUsageDisplay(sessionText, weeklyText, sm, wm));
     }
 
     private async Task OnWake()
@@ -384,6 +510,8 @@ public class App
             SwapIcon(ref _sonnetIcon, ref _lastSonnetState, _sonnetTrayIcon, 0, ColorGray, iconFactory: CreateSonnetIcon);
         if (_overageTrayIcon != null)
             SwapIcon(ref _overageIcon, ref _lastOverageState, _overageTrayIcon, 0, ColorGray, iconFactory: CreateOverageIcon);
+
+        TryUpdateHud();
     }
 
     private void UpdateTrayIcon()
@@ -427,6 +555,8 @@ public class App
             SwapIcon(ref _overageIcon, ref _lastOverageState, _overageTrayIcon,
                 (int)overageUtilPct, GetColorForUsageElapsed(overageUtilPct, 50), 50, CreateOverageIcon);
         }
+
+        TryUpdateHud();
     }
 
     private void RemoveAllTrayIcons()
@@ -504,6 +634,9 @@ public class App
             catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Refresh error: {ex.Message}"); }
         });
 
+    private PopupMenuItem CreateToggleHudMenuItem() =>
+        new(LocalizationService.T("toggle_hud"), (s, e) => ToggleHudOverlay());
+
     private PopupMenuItem CreateExitMenuItem() =>
         new(LocalizationService.T("exit"), (s, e) =>
         {
@@ -519,6 +652,7 @@ public class App
             Items =
             {
                 CreateRefreshMenuItem(),
+                CreateToggleHudMenuItem(),
                 new PopupMenuSeparator(),
                 CreateExitMenuItem()
             }
@@ -583,6 +717,7 @@ public class App
                 StartupHelper.SaveLanguage(langCode);
                 // Rebuild menu with new language
                 CreateContextMenu();
+                CreateWeeklyContextMenu();
             });
             languageItems.Add(langItem);
         }
@@ -598,6 +733,7 @@ public class App
             Items =
             {
                 refreshItem,
+                CreateToggleHudMenuItem(),
                 _showDetailsItem,
                 _launchAtLoginItem,
                 languageMenu,
@@ -617,6 +753,7 @@ public class App
         {
             _trayIcon.UpdateToolTip("Claude Session - Loading...");
             _weeklyTrayIcon.UpdateToolTip("Claude Weekly - Loading...");
+            TryUpdateHud();
             return;
         }
 
@@ -643,10 +780,13 @@ public class App
             var overageLimit = usage.ExtraUsage.LimitDollars;
             _overageTrayIcon.UpdateToolTip($"Claude Overage\n{overagePct}% | ${overageUsed:F2} / ${overageLimit:F2}");
         }
+
+        TryUpdateHud();
     }
 
     private void HandleFetchError(string localizationKey)
     {
+        _displayHudError = true;
         UpdateTrayIconError();
         var msg = LocalizationService.T(localizationKey);
         _trayIcon!.UpdateToolTip($"Claude Session - {msg}");
@@ -668,6 +808,7 @@ public class App
             return false;
         }
 
+        _displayHudError = false;
         _lastUsageData = usage;
         _lastSuccessfulRefresh = DateTimeOffset.UtcNow;
 
