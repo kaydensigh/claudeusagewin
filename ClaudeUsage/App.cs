@@ -329,33 +329,36 @@ public class App
             });
         });
 
-    private Drawing.Color GetColorForUsageElapsed(double utilizationPercent, double elapsedPercent)
+    private static Drawing.Color LerpColor(Drawing.Color a, Drawing.Color b, double t)
     {
-        var adjustedUtilization = double.Max(0, utilizationPercent - 10) / 90.0 * 100;
-        var adjustedElapsed = double.Max(1, elapsedPercent);
-        var ratio = adjustedUtilization / adjustedElapsed;
-        if (ratio > 1.1 || adjustedUtilization > 95)
-            return ColorRed;
-        if (ratio < 0.9)
-            return ColorGreen;
-        return ColorYellow;
+        t = Math.Clamp(t, 0, 1);
+        return Drawing.Color.FromArgb(
+            (int)(a.R + (b.R - a.R) * t),
+            (int)(a.G + (b.G - a.G) * t),
+            (int)(a.B + (b.B - a.B) * t));
     }
 
-    /// <summary>
-    /// Returns true if the remaining weekly quota is unreachable given the time left.
-    /// Assumes 9 five-hour sessions per week = 1 weekly quota, and 2 sessions per day max.
-    /// </summary>
-    private static bool IsWeeklyQuotaUnreachable(UsageWindow? window)
+    private Drawing.Color GetColorForUsageElapsed(double utilizationPercent, double elapsedPercent, bool allowPurple = true)
     {
-        if (window?.ResetsAt is not { } resetsAt) return false;
+        var util = Math.Clamp(utilizationPercent, 0, 100);
+        var elapsed = Math.Clamp(elapsedPercent, 0, 100);
 
-        var daysLeft = (resetsAt - DateTimeOffset.UtcNow).TotalDays;
-        if (daysLeft <= 0) return false;
+        if (util >= elapsed)
+        {
+            var midpoint = (elapsed + 100) / 2;
+            if (util <= midpoint)
+                return midpoint == elapsed ? ColorGreen : LerpColor(ColorGreen, ColorYellow, (util - elapsed) / (midpoint - elapsed));
+            return midpoint == 100 ? ColorYellow : LerpColor(ColorYellow, ColorRed, (util - midpoint) / (100 - midpoint));
+        }
 
-        var remainingFraction = 1.0 - window.Utilization / 100.0;
-        var consumableFraction = daysLeft * 2.0 / 9.0;
+        if (!allowPurple)
+            return ColorGreen;
 
-        return remainingFraction > consumableFraction;
+        // Purple means the remaining quota is unlikely to be consumed before reset.
+        var purpleThreshold = 100 - (100 - elapsed) * 1.4;
+        if (util <= purpleThreshold)
+            return ColorPurple;
+        return LerpColor(ColorPurple, ColorGreen, (util - purpleThreshold) / (elapsed - purpleThreshold));
     }
 
     /// <summary>
@@ -401,11 +404,8 @@ public class App
         var weeklyWindow = _lastUsageData.SevenDay;
         var weeklyUtilPct = weeklyWindow?.Utilization ?? 0;
         var weeklyElapsedPct = weeklyWindow?.GetElapsedPercent(SevenDaySeconds) ?? 0;
-        var weeklyColor = IsWeeklyQuotaUnreachable(weeklyWindow)
-            ? ColorPurple
-            : GetColorForUsageElapsed(weeklyUtilPct, weeklyElapsedPct);
         SwapIcon(ref _weeklyIcon, ref _lastWeeklyState, _weeklyTrayIcon!,
-            (int)weeklyUtilPct, weeklyColor, weeklyElapsedPct, CreateWeeklyIcon);
+            (int)weeklyUtilPct, GetColorForUsageElapsed(weeklyUtilPct, weeklyElapsedPct), weeklyElapsedPct, CreateWeeklyIcon);
 
         // Update sonnet icon (null check is sufficient — icon is only created when details are shown)
         if (_sonnetTrayIcon != null)
@@ -413,11 +413,8 @@ public class App
             var sonnetWindow = _lastUsageData.Sonnet;
             var sonnetUtilPct = sonnetWindow?.Utilization ?? 0;
             var sonnetElapsedPct = sonnetWindow?.GetElapsedPercent(SevenDaySeconds) ?? 0;
-            var sonnetColor = IsWeeklyQuotaUnreachable(sonnetWindow)
-                ? ColorPurple
-                : GetColorForUsageElapsed(sonnetUtilPct, sonnetElapsedPct);
             SwapIcon(ref _sonnetIcon, ref _lastSonnetState, _sonnetTrayIcon,
-                (int)sonnetUtilPct, sonnetColor, sonnetElapsedPct, CreateSonnetIcon);
+                (int)sonnetUtilPct, GetColorForUsageElapsed(sonnetUtilPct, sonnetElapsedPct), sonnetElapsedPct, CreateSonnetIcon);
         }
 
         // Update overage icon
@@ -425,7 +422,7 @@ public class App
         {
             var overageUtilPct = _lastUsageData.ExtraUsage.Utilization ?? 0;
             SwapIcon(ref _overageIcon, ref _lastOverageState, _overageTrayIcon,
-                (int)overageUtilPct, GetColorForUsageElapsed(overageUtilPct, 50), 50, CreateOverageIcon);
+                (int)overageUtilPct, GetColorForUsageElapsed(overageUtilPct, 50, allowPurple: false), 50, CreateOverageIcon);
         }
     }
 
