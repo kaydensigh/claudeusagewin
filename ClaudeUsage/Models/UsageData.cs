@@ -8,6 +8,7 @@ namespace ClaudeUsage.Models;
 [JsonSerializable(typeof(CredentialsFile))]
 [JsonSerializable(typeof(TokenRefreshResponse))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
+[JsonSerializable(typeof(HudSettings))]
 public partial class AppJsonContext : JsonSerializerContext;
 
 public class UsageData
