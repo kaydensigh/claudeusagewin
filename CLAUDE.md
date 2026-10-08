@@ -2,12 +2,12 @@
 
 ## What This Is
 
-A native Windows system tray app that monitors Claude Code API rate limits in real time. Displays up to 4 tray icons (session, weekly, sonnet, overage) with live percentage text and color-coded status. Single-file executable built with .NET 10 + Native AOT + H.NotifyIcon.
+A native Windows system tray app that monitors Claude Code API rate limits in real time. Displays up to 4 tray icons (session, weekly, model-specific weekly, overage) with live percentage text and color-coded status. Single-file executable built with .NET 10 + Native AOT + H.NotifyIcon.
 
 ## Build & Run
 
 ```bash
-cd visualstudio-project/ClaudeUsage/ClaudeUsage
+cd ClaudeUsage
 
 # Build and run (debug) — app runs synchronously, output piped to terminal,
 # terminates when dotnet process is killed (Ctrl+C)
@@ -31,13 +31,13 @@ dotnet publish -c Release -r win-x64
 ## Project Structure
 
 ```
-visualstudio-project/ClaudeUsage/ClaudeUsage/
+ClaudeUsage/
 ├── Program.cs               # Win32 message pump entry point (GetMessage loop)
 ├── App.cs                   # Tray icons, polling timer, context menu, icon rendering
 ├── Models/
 │   └── UsageData.cs         # API response model with source-generated JSON serialization
 ├── Services/
-│   ├── CredentialService.cs # OAuth token discovery (native Windows + WSL) & refresh
+│   ├── CredentialService.cs # OAuth token discovery (native Windows + WSL), read-only
 │   ├── LocalizationService.cs # 14-language JSON-based i18n
 │   └── UsageApiService.cs   # Anthropic usage API client with retry/backoff
 ├── Helpers/
@@ -49,14 +49,14 @@ visualstudio-project/ClaudeUsage/ClaudeUsage/
 ## Architecture & Key Patterns
 
 - **Raw Win32 message pump** — no WPF or WinForms dependency; `Program.cs` runs `GetMessage`/`TranslateMessage`/`DispatchMessage` directly
-- **Async/await everywhere** — never block the UI thread for I/O; timer fires on thread pool, marshaled back via `SynchronizationContext.Post()`
-- **Adaptive polling** — 7min normal, 5min fast (usage increasing), 20min idle; aligns to quota resets
+- **Async/await everywhere** — never block the message pump for I/O; a one-shot `System.Threading.Timer` fires on the thread pool and updates tray icons directly (`Shell_NotifyIcon` works from any thread on Windows 10/11, so no marshalling)
+- **Wake scheduling** — wakes every 5min and refreshes if the last success is 4min+ old; skips refreshes while the workstation is locked or idle 10min+; when session or weekly hits 100%, sleeps until the reset; after a failed refresh, retries with backoff from 1min up to 20min
 - **Exponential backoff** — up to 5 retries (1s, 2s, 4s, 8s, 16s) on HTTP 429/5xx errors
-- **Credential caching** — 30min TTL; WSL path scan uses 5s timeout to avoid hangs
-- **Token auto-refresh** — refreshes within 5min of expiry via `https://console.anthropic.com/v1/oauth/token`
+- **Credential caching** — 30min TTL; WSL path scan uses 10s timeout to avoid hangs
+- **No token refresh** — credentials are read-only; refresh tokens are single-use, so refreshing here would sign Claude Code out. An expired token just means waiting for Claude Code to refresh it
 - **Native AOT** — source-generated JSON serialization via `[JsonSerializable]` context for AOT compatibility
 - **Icon rendering** — `System.Drawing.Graphics` draws percentage text onto bitmap icons; proper `DestroyIcon()` cleanup to avoid HICON leaks
-- **API:** `GET https://api.anthropic.com/api/oauth/usage` with `anthropic-beta: oauth-2025-04-20` header (undocumented, may change)
+- **API:** `GET https://api.anthropic.com/api/oauth/usage` with `anthropic-beta: oauth-2025-04-20` header (undocumented, may change). The model-specific weekly quota comes from the `limits` array (`kind: "weekly_scoped"`, name in `scope.model.display_name`); classify on `kind`, never on the label
 
 ## Code Conventions
 

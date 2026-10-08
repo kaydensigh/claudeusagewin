@@ -55,16 +55,11 @@ public class UsageApiService
             var output = process.StandardOutput.ReadToEnd().Trim();
             process.WaitForExit(5000);
 
-            if (!string.IsNullOrWhiteSpace(output))
+            // Output may be "1.2.3", "claude-code 1.2.3" or "1.2.3 (Claude Code)"
+            var match = System.Text.RegularExpressions.Regex.Match(output, @"\d+\.\d+(\.\d+)?");
+            if (match.Success)
             {
-                // Output may be "1.2.3" or "claude-code 1.2.3" — take last token
-                var parts = output.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                var versionString = parts[^1];
-
-                if (System.Text.RegularExpressions.Regex.IsMatch(versionString, @"^\d+\.\d+"))
-                {
-                    return versionString;
-                }
+                return match.Value;
             }
         }
         catch

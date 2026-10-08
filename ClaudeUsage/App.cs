@@ -17,7 +17,7 @@ public class App
 
     private TrayIconWithContextMenu? _trayIcon;
     private TrayIconWithContextMenu? _weeklyTrayIcon;
-    private TrayIconWithContextMenu? _sonnetTrayIcon;
+    private TrayIconWithContextMenu? _modelTrayIcon;
     private TrayIconWithContextMenu? _overageTrayIcon;
     // System.Threading.Timer fires on a thread-pool thread in one-shot mode
     // (period = Timeout.Infinite); after each wake, OnWake reschedules it with
@@ -32,13 +32,13 @@ public class App
 
     private Drawing.Icon? _currentIcon;
     private Drawing.Icon? _weeklyIcon;
-    private Drawing.Icon? _sonnetIcon;
+    private Drawing.Icon? _modelIcon;
     private Drawing.Icon? _overageIcon;
 
     // Track last icon state to avoid recreating identical icons
     private (int pct, Drawing.Color color, int elapsed) _lastSessionState;
     private (int pct, Drawing.Color color, int elapsed) _lastWeeklyState;
-    private (int pct, Drawing.Color color, int elapsed) _lastSonnetState;
+    private (int pct, Drawing.Color color, int elapsed) _lastModelState;
     private (int pct, Drawing.Color color, int elapsed) _lastOverageState;
 
     // Shared colors
@@ -102,11 +102,11 @@ public class App
         _refreshTimer?.Dispose();
         _trayIcon?.Dispose();
         _weeklyTrayIcon?.Dispose();
-        _sonnetTrayIcon?.Dispose();
+        _modelTrayIcon?.Dispose();
         _overageTrayIcon?.Dispose();
         _currentIcon?.Dispose();
         _weeklyIcon?.Dispose();
-        _sonnetIcon?.Dispose();
+        _modelIcon?.Dispose();
         _overageIcon?.Dispose();
     }
 
@@ -305,7 +305,7 @@ public class App
             g.FillRegion(brush, region);
         });
 
-    private Drawing.Icon CreateSonnetIcon(int percentage, Drawing.Color color, double elapsedPct = 0) =>
+    private Drawing.Icon CreateModelIcon(int percentage, Drawing.Color color, double elapsedPct = 0) =>
         RenderIcon(percentage, color, elapsedPct, (g, brush, rect) =>
         {
             var s = rect.Width;
@@ -383,8 +383,8 @@ public class App
     {
         SwapIcon(ref _currentIcon, ref _lastSessionState, _trayIcon!, 0, ColorGray);
         SwapIcon(ref _weeklyIcon, ref _lastWeeklyState, _weeklyTrayIcon!, 0, ColorGray, iconFactory: CreateWeeklyIcon);
-        if (_sonnetTrayIcon != null)
-            SwapIcon(ref _sonnetIcon, ref _lastSonnetState, _sonnetTrayIcon, 0, ColorGray, iconFactory: CreateSonnetIcon);
+        if (_modelTrayIcon != null)
+            SwapIcon(ref _modelIcon, ref _lastModelState, _modelTrayIcon, 0, ColorGray, iconFactory: CreateModelIcon);
         if (_overageTrayIcon != null)
             SwapIcon(ref _overageIcon, ref _lastOverageState, _overageTrayIcon, 0, ColorGray, iconFactory: CreateOverageIcon);
     }
@@ -407,14 +407,21 @@ public class App
         SwapIcon(ref _weeklyIcon, ref _lastWeeklyState, _weeklyTrayIcon!,
             (int)weeklyUtilPct, GetColorForUsageElapsed(weeklyUtilPct, weeklyElapsedPct), weeklyElapsedPct, CreateWeeklyIcon);
 
-        // Update sonnet icon (null check is sufficient — icon is only created when details are shown)
-        if (_sonnetTrayIcon != null)
+        // Update model-scoped weekly icon (null check is sufficient — icon is only created when details are shown)
+        if (_modelTrayIcon != null)
         {
-            var sonnetWindow = _lastUsageData.Sonnet;
-            var sonnetUtilPct = sonnetWindow?.Utilization ?? 0;
-            var sonnetElapsedPct = sonnetWindow?.GetElapsedPercent(SevenDaySeconds) ?? 0;
-            SwapIcon(ref _sonnetIcon, ref _lastSonnetState, _sonnetTrayIcon,
-                (int)sonnetUtilPct, GetColorForUsageElapsed(sonnetUtilPct, sonnetElapsedPct), sonnetElapsedPct, CreateSonnetIcon);
+            var modelWindow = _lastUsageData.ModelWeekly?.Window;
+            if (modelWindow == null)
+            {
+                SwapIcon(ref _modelIcon, ref _lastModelState, _modelTrayIcon, 0, ColorGray, iconFactory: CreateModelIcon);
+            }
+            else
+            {
+                var modelUtilPct = modelWindow.Utilization;
+                var modelElapsedPct = modelWindow.GetElapsedPercent(SevenDaySeconds) ?? 0;
+                SwapIcon(ref _modelIcon, ref _lastModelState, _modelTrayIcon,
+                    (int)modelUtilPct, GetColorForUsageElapsed(modelUtilPct, modelElapsedPct), modelElapsedPct, CreateModelIcon);
+            }
         }
 
         // Update overage icon
@@ -430,7 +437,7 @@ public class App
     {
         _trayIcon?.Remove();
         _weeklyTrayIcon?.Remove();
-        _sonnetTrayIcon?.Remove();
+        _modelTrayIcon?.Remove();
         _overageTrayIcon?.Remove();
     }
 
@@ -459,24 +466,26 @@ public class App
         CreateWeeklyContextMenu();
         _weeklyTrayIcon.Create();
 
-        // Create sonnet and overage icons only when "Show Details" is enabled
+        // Create model and overage icons only when "Show Details" is enabled
         if (StartupHelper.GetShowDetails())
         {
-            CreateSonnetTrayIcon();
+            CreateModelTrayIcon();
             CreateOverageTrayIcon();
         }
     }
 
-    private void CreateSonnetTrayIcon()
+    private void CreateModelTrayIcon()
     {
-        _sonnetIcon ??= CreateSonnetIcon(0, ColorGray);
-        _sonnetTrayIcon = new TrayIconWithContextMenu("ClaudeUsage.Sonnet")
+        _modelIcon ??= CreateModelIcon(0, ColorGray);
+        // Name kept from the Sonnet era: the tray icon GUID derives from it, and
+        // changing it would reset the user's taskbar visibility setting.
+        _modelTrayIcon = new TrayIconWithContextMenu("ClaudeUsage.Sonnet")
         {
-            Icon = _sonnetIcon.Handle,
-            ToolTip = "Claude Sonnet - Loading..."
+            Icon = _modelIcon.Handle,
+            ToolTip = "Claude Model - Loading..."
         };
 
-        _sonnetTrayIcon.Create();
+        _modelTrayIcon.Create();
     }
 
     private void CreateOverageTrayIcon()
@@ -547,17 +556,17 @@ public class App
 
             if (showDetails)
             {
-                // Show sonnet and overage icons
-                if (_sonnetTrayIcon == null) CreateSonnetTrayIcon();
+                // Show model and overage icons
+                if (_modelTrayIcon == null) CreateModelTrayIcon();
                 if (_overageTrayIcon == null) CreateOverageTrayIcon();
                 UpdateTrayIcon();
             }
             else
             {
-                // Hide sonnet and overage icons
-                _sonnetTrayIcon?.Remove();
-                _sonnetTrayIcon?.Dispose();
-                _sonnetTrayIcon = null;
+                // Hide model and overage icons
+                _modelTrayIcon?.Remove();
+                _modelTrayIcon?.Dispose();
+                _modelTrayIcon = null;
                 _overageTrayIcon?.Remove();
                 _overageTrayIcon?.Dispose();
                 _overageTrayIcon = null;
@@ -626,19 +635,24 @@ public class App
         _trayIcon.UpdateToolTip($"Claude Session\n{LocalizationService.T("tooltip_session", sessionPct, sessionReset)}");
         _weeklyTrayIcon.UpdateToolTip($"Claude Weekly\n{LocalizationService.T("tooltip_weekly", weeklyPct, weeklyReset)}");
 
-        if (_sonnetTrayIcon != null)
+        if (_modelTrayIcon != null)
         {
-            var sonnetPct = usage.Sonnet?.UtilizationPercent ?? 0;
-            var sonnetReset = usage.Sonnet?.TimeUntilReset ?? "N/A";
-            _sonnetTrayIcon.UpdateToolTip($"Claude Sonnet\n{LocalizationService.T("tooltip_session", sonnetPct, sonnetReset)}");
+            var modelLimit = usage.ModelWeekly;
+            if (modelLimit == null)
+            {
+                _modelTrayIcon.UpdateToolTip($"Claude Model - {LocalizationService.T("no_data")}");
+            }
+            else
+            {
+                var modelWindow = modelLimit.Window;
+                _modelTrayIcon.UpdateToolTip($"Claude {modelLimit.ModelName}\n{LocalizationService.T("tooltip_weekly", modelWindow.UtilizationPercent, modelWindow.TimeUntilReset)}");
+            }
         }
 
         if (_overageTrayIcon != null && usage.ExtraUsage != null)
         {
-            var overagePct = usage.ExtraUsage.UtilizationPercent;
-            var overageUsed = usage.ExtraUsage.UsedDollars;
-            var overageLimit = usage.ExtraUsage.LimitDollars;
-            _overageTrayIcon.UpdateToolTip($"Claude Overage\n{overagePct}% | ${overageUsed:F2} / ${overageLimit:F2}");
+            var overage = usage.ExtraUsage;
+            _overageTrayIcon.UpdateToolTip($"Claude Overage\n{overage.UtilizationPercent}% | {overage.UsedFormatted} / {overage.LimitFormatted}");
         }
     }
 
@@ -648,7 +662,7 @@ public class App
         var msg = LocalizationService.T(localizationKey);
         _trayIcon!.UpdateToolTip($"Claude Session - {msg}");
         _weeklyTrayIcon!.UpdateToolTip($"Claude Weekly - {msg}");
-        _sonnetTrayIcon?.UpdateToolTip($"Claude Sonnet - {msg}");
+        _modelTrayIcon?.UpdateToolTip($"Claude Model - {msg}");
         _overageTrayIcon?.UpdateToolTip($"Claude Overage - {msg}");
     }
 

@@ -6,7 +6,6 @@ namespace ClaudeUsage.Models;
 
 [JsonSerializable(typeof(UsageData))]
 [JsonSerializable(typeof(CredentialsFile))]
-[JsonSerializable(typeof(TokenRefreshResponse))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
 public partial class AppJsonContext : JsonSerializerContext;
 
@@ -18,19 +17,58 @@ public class UsageData
     [JsonPropertyName("seven_day")]
     public UsageWindow? SevenDay { get; set; }
 
-    [JsonPropertyName("seven_day_sonnet")]
-    public UsageWindow? SevenDaySonnet { get; set; }
-
-    [JsonPropertyName("sonnet_only")]
-    public UsageWindow? SonnetOnly { get; set; }
-
     [JsonPropertyName("extra_usage")]
     public ExtraUsageData? ExtraUsage { get; set; }
 
+    [JsonPropertyName("limits")]
+    public List<UsageLimit>? Limits { get; set; }
+
     /// <summary>
-    /// Returns sonnet data from seven_day_sonnet (primary) or sonnet_only (fallback).
+    /// The weekly quota scoped to a single model (e.g. Fable), if the plan has one.
+    /// Classified on kind, never on the display label, since the scoped model changes over time.
     /// </summary>
-    public UsageWindow? Sonnet => SevenDaySonnet ?? SonnetOnly;
+    public UsageLimit? ModelWeekly =>
+        Limits?.FirstOrDefault(l => l.Kind == "weekly_scoped" && l.Scope?.Model?.DisplayName != null);
+}
+
+public class UsageLimit
+{
+    [JsonPropertyName("kind")]
+    public string? Kind { get; set; }
+
+    [JsonPropertyName("group")]
+    public string? Group { get; set; }
+
+    [JsonPropertyName("percent")]
+    public double Percent { get; set; }
+
+    [JsonPropertyName("severity")]
+    public string? Severity { get; set; }
+
+    [JsonPropertyName("resets_at")]
+    public DateTimeOffset? ResetsAt { get; set; }
+
+    [JsonPropertyName("scope")]
+    public LimitScope? Scope { get; set; }
+
+    public string? ModelName => Scope?.Model?.DisplayName;
+
+    public UsageWindow Window => new() { Utilization = Percent, ResetsAt = ResetsAt };
+}
+
+public class LimitScope
+{
+    [JsonPropertyName("model")]
+    public LimitModel? Model { get; set; }
+}
+
+public class LimitModel
+{
+    [JsonPropertyName("id")]
+    public string? Id { get; set; }
+
+    [JsonPropertyName("display_name")]
+    public string? DisplayName { get; set; }
 }
 
 public class UsageWindow
@@ -89,9 +127,27 @@ public class ExtraUsageData
     [JsonPropertyName("utilization")]
     public double? Utilization { get; set; }
 
-    public double LimitDollars => (MonthlyLimit ?? 0) / 100.0;
-    public double UsedDollars => (UsedCredits ?? 0) / 100.0;
-    public int UtilizationPercent => MonthlyLimit is > 0 ? (int)(UsedCredits!.Value / MonthlyLimit.Value * 100) : 0;
+    [JsonPropertyName("currency")]
+    public string? Currency { get; set; }
+
+    /// <summary>
+    /// Credits are in minor units (e.g. cents); this is the power of ten to divide by.
+    /// </summary>
+    [JsonPropertyName("decimal_places")]
+    public int? DecimalPlaces { get; set; }
+
+    public int UtilizationPercent => MonthlyLimit is > 0 ? (int)((UsedCredits ?? 0) / MonthlyLimit.Value * 100) : 0;
+
+    public string UsedFormatted => FormatAmount(UsedCredits);
+    public string LimitFormatted => FormatAmount(MonthlyLimit);
+
+    private string FormatAmount(double? minorUnits)
+    {
+        var places = DecimalPlaces ?? 2;
+        var amount = (minorUnits ?? 0) / Math.Pow(10, places);
+        var text = amount.ToString($"F{places}");
+        return Currency is null or "USD" ? $"${text}" : $"{text} {Currency}";
+    }
 }
 
 public class CredentialsFile
